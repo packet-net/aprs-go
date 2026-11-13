@@ -732,10 +732,11 @@ func (b StatusBuilder) Timestamp(t Timestamp) StatusBuilder {
 	return b
 }
 
-// Locator sets a 4- or 6-character Maidenhead locator at the start, such as IO91SX. It goes with
-// a Symbol: one without the other is refused when built.
+// Locator sets a 4- or 6-character Maidenhead locator at the start, such as IO91SX; lower case is
+// written in upper case, as a decoder reads it. It goes with a Symbol: one without the other is
+// refused when built.
 func (b StatusBuilder) Locator(maidenheadLocator string) StatusBuilder {
-	b.status.Locator = Ptr(maidenheadLocator)
+	b.status.Locator = Ptr(asciiUpper(maidenheadLocator))
 	return b
 }
 

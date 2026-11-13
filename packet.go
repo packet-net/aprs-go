@@ -620,7 +620,7 @@ func ax25Address(ctx *context, b []byte, offset int, role addressRole) (Address,
 	for _, c := range call {
 		switch {
 		case isUpper(c) || isDigit(c):
-		case c >= 'a' && c <= 'z':
+		case isLower(c):
 			lower = true
 		default:
 			// Anything else (punctuation, a space inside, a control character) would write a

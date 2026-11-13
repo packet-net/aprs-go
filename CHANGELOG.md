@@ -8,7 +8,9 @@ Round 3 of the conformance vectors (pinned at e0e8e39).
 - An AX.25 address holding anything but upper-case letters and digits (a lower-case letter is still tolerated) is `invalid-address`, and a call of spaces only is an empty source (`invalid-address`), destination (`empty-destination`) or digipeater (`empty-path-entry`).
 - An ambiguous position is cut to its box, not rounded, so a latitude just under 90 degrees is written in the box below the edge, in an uncompressed report and in Mic-E.
 - A wind direction in a compressed weather report is judged in whole degrees before it is rounded to the 4-degree step: 360.5 and -0.5 are `value-out-of-range`.
-- More than five analog values in a telemetry report or comment telemetry are `too-long`; a status grid locator that is not upper case is `malformed`; a PHG, RNG or DFS that loses to another extension in the one data extension keeps its own range checks.
+- More than five analog values in a telemetry report or comment telemetry are `too-long`; a status grid locator that is not upper case is `malformed`; a field that is wanted twice (a PHG, RNG or DFS that loses the one data extension, or a course, speed or wind beside a range or a GGA altitude in the cs bytes) keeps its own range checks, so its refusal can outrank `extension-conflict`.
+- An ambiguous position whose box would be centred past 90 degrees latitude or 180 degrees longitude is `value-has-no-form`; a reply-ack that is wrong on its own is `invalid-message-id` even with no message ID; undecoded data inside a third-party packet is named before a header fault in the dump tool's reader.
+- `StatusBuilder.Locator` writes a lower-case locator in upper case, as before; the encoder, given a lower-case locator, refuses.
 
 ## 1.0.1 (2026-11-13)
 

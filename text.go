@@ -130,13 +130,12 @@ func digits(b []byte) uint32 {
 	return n
 }
 
-func isDigit(c byte) bool   { return c >= '0' && c <= '9' }
-func isUpper(c byte) bool   { return c >= 'A' && c <= 'Z' }
-func isLower(c byte) bool   { return c >= 'a' && c <= 'z' }
-func isAlpha(c byte) bool   { return isUpper(c) || isLower(c) }
-func isAlnum(c byte) bool   { return isAlpha(c) || isDigit(c) }
-func isHex(c byte) bool     { return isDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') }
-func isGraphic(c byte) bool { return c >= 0x21 && c <= 0x7E }
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+func isUpper(c byte) bool { return c >= 'A' && c <= 'Z' }
+func isLower(c byte) bool { return c >= 'a' && c <= 'z' }
+func isAlpha(c byte) bool { return isUpper(c) || isLower(c) }
+func isAlnum(c byte) bool { return isAlpha(c) || isDigit(c) }
+func isHex(c byte) bool   { return isDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') }
 func toUpper(c byte) byte {
 	if isLower(c) {
 		return c - 32
