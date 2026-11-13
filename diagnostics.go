@@ -23,9 +23,10 @@ func (s Severity) String() string {
 		return "info"
 	case Warning:
 		return "warning"
-	default:
+	case Error:
 		return "error"
 	}
+	return fmt.Sprintf("severity-%d", uint8(s))
 }
 
 // AllCodes gives every diagnostic code, in catalogue order.
@@ -94,38 +95,41 @@ func (d Diagnostic) String() string {
 // not, the defect is an error and the data is not decoded (or, for the few codes that are about
 // an extra reading rather than a defect, the extra reading is not made).
 //
-// Lenient tolerates everything tolerable and is the usual choice; Strict tolerates nothing.
+// The zero value is Lenient, which tolerates everything tolerable and is the usual choice;
+// Strict tolerates nothing.
 type ParseOptions struct {
-	tolerated [2]uint64
+	// rejected holds the tolerable codes not tolerated, one bit for each of the 256 codes a Code
+	// can be, so that the zero value tolerates them all.
+	rejected [4]uint64
 }
 
-// Strict tolerates nothing: exactly what APRS12c allows.
-var Strict = ParseOptions{}
+// Lenient tolerates every tolerable defect, each with a warning. It is the zero ParseOptions.
+var Lenient = ParseOptions{}
 
-// Lenient tolerates every tolerable defect, each with a warning.
-var Lenient = func() ParseOptions {
-	var o ParseOptions
+// Strict tolerates nothing: exactly what APRS12c allows.
+var Strict = func() ParseOptions {
+	o := Lenient
 	for _, c := range AllCodes() {
-		o = o.With(c)
+		o = o.Without(c)
 	}
 	return o
 }()
 
 // Tolerates says whether code is tolerated. Always false for a code that is not tolerable.
 func (o ParseOptions) Tolerates(code Code) bool {
-	return o.tolerated[code/64]&(1<<(code%64)) != 0
+	return code.Tolerable() && o.rejected[code/64]&(1<<(code%64)) == 0
 }
 
 // With gives these options also tolerating code (ignored if the code is not tolerable).
 func (o ParseOptions) With(code Code) ParseOptions {
-	if code.Tolerable() {
-		o.tolerated[code/64] |= 1 << (code % 64)
-	}
+	o.rejected[code/64] &^= 1 << (code % 64)
 	return o
 }
 
-// Without gives these options no longer tolerating code.
+// Without gives these options no longer tolerating code (ignored if the code is not tolerable).
 func (o ParseOptions) Without(code Code) ParseOptions {
-	o.tolerated[code/64] &^= 1 << (code % 64)
+	if code.Tolerable() {
+		o.rejected[code/64] |= 1 << (code % 64)
+	}
 	return o
 }

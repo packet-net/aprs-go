@@ -423,3 +423,23 @@ func TestADAOOnAnAmbiguousPositionIsADefectWhateverItsPrecision(t *testing.T) {
 		}
 	}
 }
+
+// The zero ParseOptions is Lenient, the family's default, and every Code value is safe to ask
+// about, including ones no code has.
+func TestParseOptionsZeroValueIsLenientAndEveryCodeIsSafe(t *testing.T) {
+	var zero aprs.ParseOptions
+	eq(t, zero, aprs.Lenient)
+	line := []byte("N1EOE>APN391:!4216.95n/07243.20w#phg6230/ Easthampton MA")
+	p, _ := aprs.DecodeTNC2(line, zero)
+	eq(t, p.HasErrors(), false)
+	eq(t, p.HasWarnings(), true)
+	for c := 0; c < 256; c++ {
+		code := aprs.Code(c)
+		eq(t, aprs.Lenient.Tolerates(code), code.Tolerable())
+		eq(t, aprs.Strict.Tolerates(code), false)
+		eq(t, aprs.Lenient.Without(code).Tolerates(code), false)
+		eq(t, aprs.Strict.With(code).Tolerates(code), code.Tolerable())
+	}
+	eq(t, aprs.Lenient.Without(aprs.Code(250)), aprs.Lenient)
+	eq(t, aprs.Severity(250).String(), "severity-250")
+}
