@@ -19,6 +19,12 @@ type Device struct {
 	Features []string
 }
 
+// clone gives a copy whose Features a caller may change without changing the database.
+func (d Device) clone() Device {
+	d.Features = append([]string(nil), d.Features...)
+	return d
+}
+
 type tocallEntry struct {
 	pattern string
 	device  Device
@@ -60,7 +66,7 @@ func DeviceFromTocall(callsign string) (Device, bool) {
 	if best == nil {
 		return Device{}, false
 	}
-	return best.device, true
+	return best.device.clone(), true
 }
 
 // Device gives the sending device or program, if the database knows it: from the Mic-E type
@@ -74,13 +80,13 @@ func (p *Packet) Device() (Device, bool) {
 		case '>', ']':
 			for _, l := range micELegacy {
 				if len(l.prefix) > 0 && rune(l.prefix[0]) == prefix && l.suffix == m.DeviceSuffix {
-					return l.device, true
+					return l.device.clone(), true
 				}
 			}
 		case '`', '\'':
 			for _, s := range micESuffixes {
 				if s.suffix == m.DeviceSuffix {
-					return s.device, true
+					return s.device.clone(), true
 				}
 			}
 		}

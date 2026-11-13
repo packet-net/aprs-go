@@ -376,7 +376,7 @@ func TestAStationIsAValue(t *testing.T) {
 func TestCodesMatchTheVectors(t *testing.T) {
 	text, err := os.ReadFile(filepath.Join(vectorsDir, "codes.json"))
 	if err != nil {
-		t.Fatalf("%v: run 'git submodule update --init vectors'", err)
+		t.Skipf("%v: run 'git submodule update --init vectors'", err)
 	}
 	doc, err := neutral.Parse(text)
 	if err != nil {
@@ -512,4 +512,20 @@ func TestHandBuiltDataIsCheckedFirst(t *testing.T) {
 	eq(t, refusal(t, err), aprs.RefusalNotEncodable)
 	_, err = aprs.Encode(nil)
 	eq(t, refusal(t, err), aprs.RefusalNotEncodable)
+}
+
+// A device's features are the caller's to change.
+func TestDeviceFeaturesAreACopy(t *testing.T) {
+	for _, tocall := range []string{"APAIOR", "APERRB"} {
+		d, ok := aprs.DeviceFromTocall(tocall)
+		if !ok || len(d.Features) == 0 {
+			continue
+		}
+		before := d.Features[0]
+		d.Features[0] = "changed"
+		again, _ := aprs.DeviceFromTocall(tocall)
+		eq(t, again.Features[0], before)
+		return
+	}
+	t.Skip("no device with features found to try")
 }

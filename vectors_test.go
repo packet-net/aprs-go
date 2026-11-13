@@ -37,7 +37,8 @@ func loadCases(t *testing.T) []vectorCase {
 	t.Helper()
 	files, err := filepath.Glob(filepath.Join(vectorsDir, "cases", "*.json"))
 	if err != nil || len(files) == 0 {
-		t.Fatalf("%s/cases is missing: run 'git submodule update --init vectors'", vectorsDir)
+		// A module download has no submodule; a clone needs 'git submodule update --init vectors'.
+		t.Skipf("%s/cases is missing: run 'git submodule update --init vectors'", vectorsDir)
 	}
 	sort.Strings(files)
 	var cases []vectorCase
