@@ -129,7 +129,7 @@ Every snippet here is a runnable example in `example_test.go`.
 
 `go test ./...` runs the whole [aprs-vectors](https://github.com/packet-net/aprs-vectors) suite (a git submodule at `vectors/`; clone with `--recurse-submodules`, or run `git submodule update --init`). Each case is checked lenient, strict, with only its own tolerance switched off, re-encoded byte for byte, and read back. A deliberate difference would be listed, with its reason, in `testdata/known-differences.txt`; there are none.
 
-`cmd/aprs-diffdump` is the dump tool the vectors' `tools/compare.py` reads. This package was compared with the other five over every vectors case, a million generated encode cases, a million builder recipes and two million fuzzed packets, and agrees with them on every one.
+`cmd/aprs-diffdump` is the dump tool the vectors' `tools/compare.py` reads. This package was compared with the other five over every vectors case, a million generated encode cases, a million builder recipes and two million fuzzed packets. It writes the same bytes as they do throughout; the only differences left were a handful of refusal codes on which the other five do not agree among themselves either.
 
 ## Licence
 
