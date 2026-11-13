@@ -305,6 +305,12 @@ func decodeTNC2Line(line []byte, options ParseOptions, thirdParty bool) (*Packet
 		path[i].Used = true
 	}
 
+	// A packet inside a third-party packet shares the outer packet's information field rather
+	// than copying it, so nested third-party packets cost memory in proportion to the line, not
+	// its square.
+	if !thirdParty {
+		info = append([]byte(nil), info...)
+	}
 	p := decodeWithContext(ctx, source, destination, path, info)
 	p.ThirdParty = thirdParty
 	return p, nil
@@ -364,19 +370,19 @@ func decodeAX25(frame []byte, options ParseOptions) (*Packet, *HeaderError) {
 	for i, b := range addresses[2:] {
 		path = append(path, PathEntry{Address: decoded[i+2], Used: b[6]&0x80 != 0})
 	}
-	return decodeWithContext(ctx, source, destination, path, frame[at+2:]), nil
+	return decodeWithContext(ctx, source, destination, path, append([]byte(nil), frame[at+2:]...)), nil
 }
 
 // Decode decodes an information field whose header you already have.
 func Decode(source, destination Address, path []PathEntry, information []byte, options ParseOptions) *Packet {
-	return decodeWithContext(newContext(options), source, destination, path, information)
+	return decodeWithContext(newContext(options), source, destination, path, append([]byte(nil), information...))
 }
 
 func decodeWithContext(ctx *context, source, destination Address, path []PathEntry, information []byte) *Packet {
+	// information is the packet's own: the caller copied it, or it is a third-party packet's
+	// share of the outer packet's.
 	data := decodeInformation(ctx, destination, information)
-	info := make([]byte, len(information))
-	copy(info, information)
-	return &Packet{Source: source, Destination: destination, Path: path, Information: info, Data: data, Diagnostics: ctx.diagnostics}
+	return &Packet{Source: source, Destination: destination, Path: path, Information: information, Data: data, Diagnostics: ctx.diagnostics}
 }
 
 // NewPacket builds a packet from data, encoding its information field. For Mic-E data the
