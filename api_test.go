@@ -408,3 +408,18 @@ func TestCodesMatchTheVectors(t *testing.T) {
 		}
 	}
 }
+
+// A !DAO! on an ambiguous position contradicts it whatever its precision, !W  ! too (vectors
+// README, Encoding: it "reads back with dao-with-ambiguity").
+func TestADAOOnAnAmbiguousPositionIsADefectWhateverItsPrecision(t *testing.T) {
+	for _, l := range []string{"N0CALL>APZ001:!5132.  N/00005.  W-!W  !", "N0CALL>APZ001:!5132.  N/00005.  W-!3  !", "N0CALL>APZ001:!5132.  N/00005.  W-!W12!"} {
+		p, _ := aprs.DecodeTNC2([]byte(l), aprs.Lenient)
+		if len(p.Diagnostics) != 1 || p.Diagnostics[0].Code != aprs.CodeDAOWithAmbiguity || p.Diagnostics[0].Severity != aprs.Warning {
+			t.Errorf("%s: %v", l, p.Diagnostics)
+		}
+		strict, _ := aprs.DecodeTNC2([]byte(l), aprs.Strict)
+		if strict.Data != aprs.Data(aprs.UnrecognizedMalformed) {
+			t.Errorf("%s strict: %v", l, strict.Data)
+		}
+	}
+}

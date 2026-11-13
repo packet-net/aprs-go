@@ -707,12 +707,16 @@ func findDAO(c []byte, telemetry *span, joined int) (span, foundDAO, bool) {
 func applyDAO(ctx *context, fields *Positioned, found foundDAO, offset int) bool {
 	d := found.dao
 	fields.DAO = &d
-	if found.dao.Precision == DAONone || fields.Compressed {
+	if fields.Compressed {
 		return true
 	}
 	if fields.Position.Ambiguity > 0 {
-		// Extra precision on an ambiguous position contradicts it; the position stays as it was.
+		// A !DAO! on an ambiguous position contradicts it whatever its precision, !W  ! too
+		// (vectors README, Encoding); the position stays as it was.
 		return ctx.tolerate(CodeDAOWithAmbiguity, "a !DAO! adds precision to an ambiguous position", offset)
+	}
+	if found.dao.Precision == DAONone {
+		return true
 	}
 	p := &fields.Position
 	if math.Signbit(p.Latitude) {
