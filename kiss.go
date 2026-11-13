@@ -34,8 +34,11 @@ func WrapKISS(frame []byte, port uint8) []byte {
 	return append(out, kissFEND)
 }
 
-// UnwrapKISS removes KISS framing: FEND delimiters, FESC escapes and the command byte. It gives
-// ErrNotKISSData when the frame is empty or its command is not a data frame.
+// UnwrapKISS removes KISS framing from one frame: the FEND delimiters at either end, FESC escapes
+// and the command byte. It gives ErrNotKISSData when the frame is empty or its command is not a
+// data frame. A FEND inside the frame is kept as a data byte, not taken as the end of a frame,
+// so split a byte stream from a TNC at its FENDs first and pass one frame at a time. A FESC
+// before anything but TFEND or TFESC gives that byte, and a FESC at the end is kept as it is.
 func UnwrapKISS(frame []byte) ([]byte, error) {
 	start, end := 0, len(frame)
 	for start < end && frame[start] == kissFEND {
@@ -67,9 +70,10 @@ func UnwrapKISS(frame []byte) ([]byte, error) {
 	return out[1:], nil
 }
 
-// DecodeKISS decodes a KISS data frame as read from a TNC: any FEND delimiters, the command byte,
-// then an escaped AX.25 frame. It fails with ErrNotKISSData for a frame that is not a KISS data
-// frame, and otherwise as DecodeAX25 does.
+// DecodeKISS decodes one KISS data frame as read from a TNC: any FEND delimiters, the command
+// byte, then an escaped AX.25 frame. The port in the command byte is not kept: read frame[1]>>4
+// (after any leading FEND) if you need it. It fails with ErrNotKISSData for a frame that is not a
+// KISS data frame, and otherwise as DecodeAX25 does.
 func DecodeKISS(frame []byte, options ParseOptions) (*Packet, error) {
 	ax25, err := UnwrapKISS(frame)
 	if err != nil {

@@ -89,11 +89,17 @@ const (
 // reported; IsValid says whether they make sense. Make one with TimestampDHM, TimestampHMS or
 // TimestampMDHM; fields the kind does not use are zero.
 type Timestamp struct {
-	Kind   TimestampKind
-	Month  uint8
-	Day    uint8
-	Hour   uint8
+	// Kind says which form it is, and so which fields below it uses.
+	Kind TimestampKind
+	// Month, 1-12 (MonthDayHourMinute only).
+	Month uint8
+	// Day of the month, 1-31 (DayHourMinute and MonthDayHourMinute).
+	Day uint8
+	// Hour, 0-23.
+	Hour uint8
+	// Minute, 0-59.
 	Minute uint8
+	// Second, 0-59 (HourMinuteSecond only).
 	Second uint8
 	// UTC is true for a DayHourMinute timestamp in UTC (z) rather than local time (/).
 	UTC bool
@@ -271,13 +277,21 @@ type DFBearing struct {
 // Storm is a storm or hurricane report in an object (APRS12c ch. 12). Each value is nil when
 // sent as unknown.
 type Storm struct {
-	Kind                  StormKind
-	SustainedWindKnots    *uint16
-	GustKnots             *uint16
-	CentralPressureMbar   *uint16
-	HurricaneRadiusNM     *uint16
+	// Kind is what it is: tropical storm, hurricane or tropical depression.
+	Kind StormKind
+	// SustainedWindKnots is the sustained wind speed, knots.
+	SustainedWindKnots *uint16
+	// GustKnots is the peak gusts, knots.
+	GustKnots *uint16
+	// CentralPressureMbar is the central pressure, millibars.
+	CentralPressureMbar *uint16
+	// HurricaneRadiusNM is the radius of hurricane-force winds, nautical miles.
+	HurricaneRadiusNM *uint16
+	// TropicalStormRadiusNM is the radius of tropical-storm winds, nautical miles.
 	TropicalStormRadiusNM *uint16
-	WholeGaleRadiusNM     *uint16
+	// WholeGaleRadiusNM is the radius of whole gale winds, nautical miles, sent only in the
+	// optional %ggg field.
+	WholeGaleRadiusNM *uint16
 }
 
 // StormKind is the kind of storm.
@@ -404,8 +418,10 @@ type WeatherField struct {
 
 // Positioned holds the fields shared by positions, Mic-E reports, objects and items.
 type Positioned struct {
+	// Position is where.
 	Position Position
-	Symbol   Symbol
+	// Symbol is how to draw it on a map.
+	Symbol Symbol
 	// Compressed: sent in compressed form (APRS12c ch. 9).
 	Compressed bool
 	// Compression is the compressed type byte, when it says anything (course/speed, range or
@@ -415,18 +431,27 @@ type Positioned struct {
 	// north; 1-360 is a known course. Whole when decoded; rounded once when encoded (to 4 degrees
 	// in a compressed report).
 	CourseDegrees *float64
-	SpeedKnots    *float64
-	AltitudeFeet  *float64
-	PHG           *PHG
+	// SpeedKnots is the speed over ground, knots.
+	SpeedKnots *float64
+	// AltitudeFeet is the altitude, feet: from a /A=, the compressed cs bytes or Mic-E.
+	AltitudeFeet *float64
+	// PHG is power, antenna height, gain and directivity.
+	PHG *PHG
 	// RangeMiles is the radio range (RNGrrrr or compressed).
 	RangeMiles *float64
-	DFS        *DFS
-	Area       *AreaObject
-	DFBearing  *DFBearing
-	Storm      *Storm
-	DAO        *DAO
+	// DFS is omni DF signal strength.
+	DFS *DFS
+	// Area is an area object's shape and size, on the area symbol.
+	Area *AreaObject
+	// DFBearing is a DF bearing and quality, on the DF symbol.
+	DFBearing *DFBearing
+	// Storm is storm data, on the hurricane symbol.
+	Storm *Storm
+	// DAO is a !DAO! datum and its precision; any extra digits are already in Position.
+	DAO *DAO
 	// Telemetry is base-91 comment telemetry.
 	Telemetry *CommentTelemetry
+	// Frequency is an APRS 1.2 voice frequency at the start of the comment.
 	Frequency *VoiceFrequency
 	// Weather, for a weather station symbol.
 	Weather *Weather
@@ -530,8 +555,10 @@ type ItemReport struct {
 
 // Message is a message to a station (APRS12c ch. 14).
 type Message struct {
+	// Addressee is the station it is for, without the padding to 9 characters.
 	Addressee string
-	Text      string
+	// Text is the message text.
+	Text string
 	// MessageID is the message number, if an acknowledgement is wanted.
 	MessageID *string
 	// ReplyAck: a pointer to "" says the sender supports reply-acks; otherwise the ID being acked.
@@ -562,7 +589,9 @@ type Reject struct {
 type Bulletin struct {
 	// Addressee, such as BLN3.
 	Addressee string
-	Text      string
+	// Text is the bulletin text.
+	Text string
+	// MessageID, if sent.
 	MessageID *string
 }
 
@@ -570,7 +599,9 @@ type Bulletin struct {
 type NWSBulletin struct {
 	// Addressee, such as NWS-WARN.
 	Addressee string
-	Text      string
+	// Text is the bulletin text.
+	Text string
+	// MessageID, if sent.
 	MessageID *string
 }
 
@@ -772,12 +803,16 @@ type Capabilities struct {
 
 // Capability is one station capability: a token and, for TOKEN=VALUE, its value.
 type Capability struct {
+	// Token is the capability's name, such as IGATE.
 	Token string
+	// Value is the text after =, or nil for a bare TOKEN.
 	Value *string
 }
 
 // ThirdParty is third-party traffic: } and a whole packet inside (APRS12c ch. 17).
 type ThirdParty struct {
+	// Packet is the packet carried inside, decoded with the same options. Its Information is
+	// part of the outer packet's, and its ThirdParty field is true.
 	Packet *Packet
 }
 

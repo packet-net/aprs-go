@@ -2,13 +2,15 @@
 
 An APRS (Automatic Packet Reporting System) encoder and decoder in Go. It covers every APRS 1.2 data type in [APRS12c](https://github.com/wb2osz/aprsspec), from TNC2 / APRS-IS text lines, AX.25 frames or KISS frames. Standard library only, no cgo, no `unsafe`.
 
-Conforms to [aprs-vectors](https://github.com/packet-net/aprs-vectors) 1.0: every case passes, and it writes the same bytes as the [C#](https://github.com/packet-net/aprs-cs), [Rust](https://github.com/packet-net/aprs-rs), [Python](https://github.com/packet-net/aprs-py), [TypeScript](https://github.com/packet-net/aprs-ts) and [C](https://github.com/packet-net/aprs-c) implementations.
+Conforms to [aprs-vectors](https://github.com/packet-net/aprs-vectors) 1.0.1: every case passes, and it writes the same bytes as the [C#](https://github.com/packet-net/aprs-cs), [Rust](https://github.com/packet-net/aprs-rs), [Python](https://github.com/packet-net/aprs-py), [TypeScript](https://github.com/packet-net/aprs-ts) and [C](https://github.com/packet-net/aprs-c) implementations.
 
 - **Decoding never fails because of the information field.** Every deviation from the spec becomes a `Diagnostic` with a stable `Code`, and the rest of the packet is still read where it can be.
-- **Strict or lenient, one defect at a time.** `ParseOptions` says which of the 32 tolerable defects to accept. `aprs.Lenient` accepts them all, each with a warning; `aprs.Strict` accepts none; any single one can be switched off.
+- **Strict or lenient, one defect at a time.** `ParseOptions` says which of the 32 tolerable defects to accept. `aprs.Lenient` (the zero value) accepts them all, each with a warning; `aprs.Strict` accepts none; any single one can be switched off.
 - **The encoder writes only what the spec allows.** It checks what it wrote by decoding it again: a comment that would read back as something else, such as an altitude or a `!DAO!`, is escaped or refused, never silently changed.
 
 ## Install
+
+Go 1.24 or later.
 
 ```sh
 go get github.com/packet-net/aprs-go
