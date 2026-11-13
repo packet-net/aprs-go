@@ -316,14 +316,14 @@ func UnrecognizedName(u aprs.Unrecognized) string {
 }
 
 var (
-	fixNames     = [...]string{"old", "current"}
-	sourceNames  = [...]string{"other", "gll", "gga", "rmc"}
-	originNames  = [...]string{"compressed", "tnc-beacon-text", "software", "reserved3", "kpc3", "pico", "other-tracker", "digipeater-conversion"}
-	shapeNames   = [...]string{"open-circle", "line-down-right", "open-ellipse", "open-triangle", "open-box", "filled-circle", "line-down-left", "filled-ellipse", "filled-triangle", "filled-box"}
-	colorNames   = [...]string{"black", "blue", "green", "cyan", "red", "violet", "yellow", "gray", "black-low", "blue-low", "green-low", "cyan-low", "red-low", "violet-low", "yellow-low", "gray-low"}
-	stormNames   = [...]string{"tropical-storm", "hurricane", "tropical-depression"}
-	daoNames     = [...]string{"none", "thousandths", "base91"}
-	toneNames    = [...]string{"off", "tone", "ctcss", "dcs", "tone-burst"}
+	fixNames    = [...]string{"old", "current"}
+	sourceNames = [...]string{"other", "gll", "gga", "rmc"}
+	originNames = [...]string{"compressed", "tnc-beacon-text", "software", "reserved3", "kpc3", "pico", "other-tracker", "digipeater-conversion"}
+	shapeNames  = [...]string{"open-circle", "line-down-right", "open-ellipse", "open-triangle", "open-box", "filled-circle", "line-down-left", "filled-ellipse", "filled-triangle", "filled-box"}
+	colorNames  = [...]string{"black", "blue", "green", "cyan", "red", "violet", "yellow", "gray", "black-low", "blue-low", "green-low", "cyan-low", "red-low", "violet-low", "yellow-low", "gray-low"}
+	stormNames  = [...]string{"tropical-storm", "hurricane", "tropical-depression"}
+	daoNames    = [...]string{"none", "thousandths", "base91"}
+	toneNames   = [...]string{"off", "tone", "ctcss", "dcs", "tone-burst"}
 )
 
 func positioned(o obj, f *aprs.Positioned) {
