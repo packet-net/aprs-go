@@ -100,16 +100,6 @@ func toU32(x float64) uint32 {
 	return uint32(x)
 }
 
-func toU16(x float64) uint16 {
-	if !(x > 0) {
-		return 0
-	}
-	if x >= 65535.0 {
-		return math.MaxUint16
-	}
-	return uint16(x)
-}
-
 func toU8(x float64) uint8 {
 	if !(x > 0) {
 		return 0

@@ -253,6 +253,7 @@ func TestSmallThingsAProgramReads(t *testing.T) {
 	eq(t, ok, false)
 	phg := aprs.PHG{Power: 5, Height: 3, Gain: 6, Directivity: 2}
 	directivity, ok := phg.DirectivityDegrees()
+	eq(t, ok, true)
 	eq(t, phg.PowerWatts(), uint32(25))
 	eq(t, phg.HeightFeet(), 80.0)
 	eq(t, phg.GainDB(), uint8(6))

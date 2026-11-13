@@ -1,0 +1,46 @@
+name: ci
+
+# Build, lint and test on every push and pull request, on GitHub's runners:
+#  - gofmt, go vet and staticcheck
+#  - the conformance vectors (the vectors submodule), the examples and the unit tests
+#  - the oldest Go the module supports (go.mod), and the current one
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (Go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ['1.24', 'stable']
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go }}
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then echo "::error::not gofmt-clean: $unformatted"; exit 1; fi
+      - run: go vet ./...
+      - run: go test -count=1 ./...
+      - name: Vectors pass count
+        run: go test -count=1 -run 'TestVectors$' -v . | grep -E 'cases,|^--- '
+      - name: staticcheck
+        if: matrix.go == 'stable'
+        run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...

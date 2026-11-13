@@ -2,7 +2,6 @@ package aprs
 
 import (
 	"fmt"
-	"math/bits"
 )
 
 // Severity is how serious a diagnostic is.
@@ -129,9 +128,4 @@ func (o ParseOptions) With(code Code) ParseOptions {
 func (o ParseOptions) Without(code Code) ParseOptions {
 	o.tolerated[code/64] &^= 1 << (code % 64)
 	return o
-}
-
-// tolerableCount is used by tests: how many codes a lenient decoder accepts.
-func (o ParseOptions) tolerableCount() int {
-	return bits.OnesCount64(o.tolerated[0]) + bits.OnesCount64(o.tolerated[1])
 }

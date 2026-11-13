@@ -1,0 +1,41 @@
+name: release
+
+# A Go module is published by its tag: pushing v1.2.3 makes it available to `go get`. This
+# workflow checks the tagged commit and makes a GitHub release for it.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: release aprs-go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - name: The tag has a CHANGELOG entry
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version="${GITHUB_REF#refs/tags/v}"
+          if ! grep -q "^## ${version} " CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no entry for ${version}"
+            exit 1
+          fi
+      - run: go vet ./...
+      - run: go test -count=1 ./...
+      - name: GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF#refs/tags/}" --title "${GITHUB_REF#refs/tags/}" --verify-tag \
+            --notes "See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md). Install: \`go get github.com/packet-net/aprs-go@${GITHUB_REF#refs/tags/}\`"
