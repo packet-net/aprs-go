@@ -372,6 +372,14 @@ func compressedCS(out []byte, f *Positioned, p *pending) ([]byte, bool) {
 		if courseSpeed || f.RangeMiles != nil || wind != nil {
 			p.note(newEncodeError(RefusalExtensionConflict, "the cs bytes carry the GGA altitude, so a compressed position cannot also carry a course, speed, range or wind"))
 		}
+		// What wants the cs bytes besides the altitude keeps its own checks: the place exists but
+		// is wanted twice.
+		if wind != nil {
+			windCode(wind, p)
+		}
+		if courseSpeed {
+			courseSpeedCode(f, p)
+		}
 		if f.AltitudeFeet != nil {
 			feet := *f.AltitudeFeet
 			if !isFinite(feet) {
@@ -403,38 +411,15 @@ func compressedCS(out []byte, f *Positioned, p *pending) ([]byte, bool) {
 		if wind.WindDirectionDegrees == nil || wind.WindSpeedMph == nil {
 			p.note(newEncodeError(RefusalMissingField, "the cs bytes carry the wind as a direction and a speed together, so both are needed"))
 		}
-		if wind.WindDirectionDegrees != nil {
-			// Whether the direction is in range is decided in whole degrees, as a course's is,
-			// and a direction in range is then rounded once to the 4-degree step.
-			if _, err := wholeDegrees(*wind.WindDirectionDegrees, "wind direction"); err != nil {
-				p.note(err)
-			} else if v, err := directionCode(*wind.WindDirectionDegrees, "wind direction"); err != nil {
-				p.note(err)
-			} else {
-				c = v
-			}
-		}
-		if wind.WindSpeedMph != nil {
-			if v, err := speedCode(*wind.WindSpeedMph / knotsToMph); err != nil {
-				p.note(err)
-			} else {
-				s = v
-			}
-		}
+		c, s = windCode(wind, p)
 	case f.RangeMiles != nil:
 		if courseSpeed {
 			p.note(newEncodeError(RefusalExtensionConflict, "the cs bytes carry a course and speed or a range, not both (APRS12c ch. 9)"))
 		}
 		// The steps are 2 x 1.08^s miles for every whole s, and a range rounds to the nearest; one
 		// whose s is below the byte's 0 is refused (1.95 miles is s 0, 1.9 is s -1).
-		if f.CourseDegrees != nil {
-			// A course of 0 has no form, whatever else is wrong.
-			if whole, err := wholeDegrees(*f.CourseDegrees, "course"); err != nil {
-				p.note(err)
-			} else if whole == 0 {
-				p.note(newEncodeError(RefusalValueHasNoForm, "a compressed course of 0 would read back as 360, and the cs bytes have no unknown course"))
-			}
-		}
+		// A course and speed beside the range keep their own checks (a course of 0 has no form).
+		courseSpeedCode(f, p)
 		if step, ok := rangeStep(*f.RangeMiles, p); ok {
 			c, s = '{'-33, step
 		}
@@ -445,27 +430,7 @@ func compressedCS(out []byte, f *Positioned, p *pending) ([]byte, bool) {
 		if f.CourseDegrees == nil || f.SpeedKnots == nil {
 			p.note(newEncodeError(RefusalMissingField, "the cs bytes carry a course and a speed together, so a compressed report needs both"))
 		}
-		if f.CourseDegrees != nil {
-			// Unknown (0) and in range (1-360) are decided in whole degrees; a known course is
-			// then rounded once to the 4-degree step, where the step at north is 360.
-			course := *f.CourseDegrees
-			if whole, err := wholeDegrees(course, "course"); err != nil {
-				p.note(err)
-			} else if whole == 0 {
-				p.note(newEncodeError(RefusalValueHasNoForm, "a compressed course of 0 would read back as 360, and the cs bytes have no unknown course"))
-			} else if v, err := directionCode(course, "course"); err != nil {
-				p.note(err)
-			} else {
-				c = v
-			}
-		}
-		if f.SpeedKnots != nil {
-			if v, err := speedCode(*f.SpeedKnots); err != nil {
-				p.note(err)
-			} else {
-				s = v
-			}
-		}
+		c, s = courseSpeedCode(f, p)
 	default:
 		// No course/speed, range or altitude: the spec's own form for that, which has no type byte.
 		if f.Compression != nil {
@@ -474,6 +439,57 @@ func compressedCS(out []byte, f *Positioned, p *pending) ([]byte, bool) {
 		return append(out, " sT"...), false
 	}
 	return append(out, c+33, s+33, typeToBits(t)+33), altitude
+}
+
+// courseSpeedCode gives a compressed report's c and s bytes for its course and speed, noting what
+// is wrong with each value on its own: a course of 0 has no form, and the others are in range or not.
+func courseSpeedCode(f *Positioned, p *pending) (c, s byte) {
+	if f.CourseDegrees != nil {
+		// Unknown (0) and in range (1-360) are decided in whole degrees; a known course is
+		// then rounded once to the 4-degree step, where the step at north is 360.
+		course := *f.CourseDegrees
+		if whole, err := wholeDegrees(course, "course"); err != nil {
+			p.note(err)
+		} else if whole == 0 {
+			p.note(newEncodeError(RefusalValueHasNoForm, "a compressed course of 0 would read back as 360, and the cs bytes have no unknown course"))
+		} else if v, err := directionCode(course, "course"); err != nil {
+			p.note(err)
+		} else {
+			c = v
+		}
+	}
+	if f.SpeedKnots != nil {
+		if v, err := speedCode(*f.SpeedKnots); err != nil {
+			p.note(err)
+		} else {
+			s = v
+		}
+	}
+	return c, s
+}
+
+// windCode gives a compressed weather report's c and s bytes for its wind, noting what is wrong
+// with each value on its own.
+func windCode(wind *Weather, p *pending) (c, s byte) {
+	if wind.WindDirectionDegrees != nil {
+		// Whether the direction is in range is decided in whole degrees, as a course's is, and a
+		// direction in range is then rounded once to the 4-degree step.
+		if _, err := wholeDegrees(*wind.WindDirectionDegrees, "wind direction"); err != nil {
+			p.note(err)
+		} else if v, err := directionCode(*wind.WindDirectionDegrees, "wind direction"); err != nil {
+			p.note(err)
+		} else {
+			c = v
+		}
+	}
+	if wind.WindSpeedMph != nil {
+		if v, err := speedCode(*wind.WindSpeedMph / knotsToMph); err != nil {
+			p.note(err)
+		} else {
+			s = v
+		}
+	}
+	return c, s
 }
 
 // rangeStep gives a compressed range's s byte: the steps are 2 x 1.08^s miles for every whole s,

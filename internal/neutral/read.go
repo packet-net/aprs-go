@@ -915,8 +915,21 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 		}
 		diagnostics = append(diagnostics, diagnostic)
 	}
-	// The header is written before the data, so a header the encoder cannot write back is refused
-	// before the inner data is looked at.
+	dataValue := p.get("data")
+	if dataValue == nil {
+		return nil, p.missing("data")
+	}
+	data, err := ReadData(dataValue)
+	if err != nil && !err.Refused {
+		return nil, err
+	}
+	// Undecoded data has no neutral form of its bytes: not-encodable, the first of the refusal
+	// reasons, which no header fault outranks.
+	if d, ok := data.(aprs.Unrecognized); ok && d != aprs.UnrecognizedEmpty {
+		return nil, unsupported("packet.data: undecoded, and its bytes are not in the neutral form")
+	}
+	// A header the encoder cannot write back is refused before the inner data's own faults are
+	// named (invalid-third-party-header comes before them in the refusal order).
 	headerDefect := false
 	for _, d := range diagnostics {
 		headerDefect = headerDefect || isHeaderDefect(d.Code)
@@ -934,11 +947,6 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 	if headerDefect || usedOutOfOrder {
 		return nil, refused(aprs.RefusalInvalidThirdPartyHeader, "the third-party packet's header cannot be written back")
 	}
-	dataValue := p.get("data")
-	if dataValue == nil {
-		return nil, p.missing("data")
-	}
-	data, err := ReadData(dataValue)
 	if err != nil {
 		return nil, err
 	}

@@ -670,6 +670,10 @@ func idAndReply(out []byte, id, replyAck *string, p *pending) []byte {
 	switch {
 	case id == nil && replyAck == nil:
 	case id == nil:
+		// A reply-ack wrong on its own is wrong whatever else is given.
+		if r := *replyAck; r != "" && !idOK(r) {
+			p.note(newEncodeError(RefusalInvalidMessageID, "a reply-ack is 1-5 letters or digits"))
+		}
 		p.note(newEncodeError(RefusalMissingField, "a reply-ack goes with a message ID"))
 	default:
 		if !idOK(*id) {

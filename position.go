@@ -267,6 +267,14 @@ func checkSymbol(s Symbol) *EncodeError {
 func encodeUncompressed(out []byte, position Position, symbol Symbol, dao *bool, p *pending) ([]byte, *[2]byte) {
 	p.run(checkSymbol(symbol))
 	position = checkedPosition(position, p)
+	if a := position.Ambiguity; a >= 1 && a <= 4 {
+		// A position at 90 degrees latitude or 180 degrees longitude has a box centred past it,
+		// which no form holds: a decoder reports the centre.
+		half := uint64([...]float64{1, 10, 100, 1000, 6000}[a] / 2)
+		if cutToBox(position.Latitude, a)+half > 90*6000 || cutToBox(position.Longitude, a)+half > 180*6000 {
+			p.note(newEncodeError(RefusalValueHasNoForm, "an ambiguous position at 90 degrees latitude or 180 degrees longitude has a box centred past it"))
+		}
+	}
 	if position.Ambiguity > 0 && dao != nil {
 		p.note(newEncodeError(RefusalFieldNotAllowed, "a !DAO! adds precision to an ambiguous position, which contradicts it"))
 	}

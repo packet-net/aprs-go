@@ -665,30 +665,52 @@ func encodeMicE(r *MicEReport) (Address, []byte, *EncodeError) {
 		}
 	}
 	beforeExtension := len(out)
-	switch {
-	case f.PHG != nil:
-		var err *EncodeError
-		out, err = phgCodes(out, *f.PHG)
-		pend.run(err)
-		if f.PHG.BeaconsPerHour != nil {
-			if c, ok := beaconRateChar(*f.PHG.BeaconsPerHour); ok {
-				out = append(out, c, '/')
-			} else {
-				pend.note(newEncodeError(RefusalValueOutOfRange, "PHGR beacons per hour is 1-35"))
+	// One of PHG, RNG and DFS is written; any other keeps its own checks.
+	exts := []struct {
+		present bool
+		write   func(out []byte) []byte
+	}{
+		{f.PHG != nil, func(out []byte) []byte {
+			var err *EncodeError
+			out, err = phgCodes(out, *f.PHG)
+			pend.run(err)
+			if f.PHG.BeaconsPerHour != nil {
+				if c, ok := beaconRateChar(*f.PHG.BeaconsPerHour); ok {
+					out = append(out, c, '/')
+				} else {
+					pend.note(newEncodeError(RefusalValueOutOfRange, "PHGR beacons per hour is 1-35"))
+				}
 			}
+			return out
+		}},
+		{f.RangeMiles != nil, func(out []byte) []byte {
+			rng := *f.RangeMiles
+			n := roundSteps(rng)
+			if !inRange(n, 0, 9999) {
+				pend.note(newEncodeError(refusalForValue(rng), "RNG range is 0-9999 miles"))
+			} else {
+				out = append(out, fmt.Sprintf("RNG%04d", toU32(n))...)
+			}
+			return out
+		}},
+		{f.DFS != nil, func(out []byte) []byte {
+			var err *EncodeError
+			out, err = dfsCodes(out, *f.DFS)
+			pend.run(err)
+			return out
+		}},
+	}
+	written := false
+	for _, e := range exts {
+		if !e.present {
+			continue
 		}
-	case f.RangeMiles != nil:
-		rng := *f.RangeMiles
-		n := roundSteps(rng)
-		if !inRange(n, 0, 9999) {
-			pend.note(newEncodeError(refusalForValue(rng), "RNG range is 0-9999 miles"))
+		if written {
+			e.write(nil)
 		} else {
-			out = append(out, fmt.Sprintf("RNG%04d", toU32(n))...)
+			out = e.write(out)
+			written = true
 		}
-	case f.DFS != nil:
-		var err *EncodeError
-		out, err = dfsCodes(out, *f.DFS)
-		pend.run(err)
 	}
 	afterExtension := -1
 	if len(out) > beforeExtension {
