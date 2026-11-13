@@ -529,3 +529,17 @@ func TestDeviceFeaturesAreACopy(t *testing.T) {
 	}
 	t.Skip("no device with features found to try")
 }
+
+// A telemetry builder given six analog values and a line break in the comment refuses with the
+// line break (invalid-character), which the refusal order puts before too-long.
+func TestTelemetryBuilderRefusesInEncoderOrder(t *testing.T) {
+	v := func(x float64) *float64 { return &x }
+	st := me(t)
+	_, err := st.Telemetry(1).Analog(v(1), v(2), v(3), v(4), v(5), v(6)).Comment("a\rb").Build()
+	if err == nil {
+		t.Fatal("expected a refusal")
+	}
+	eq(t, err.(*aprs.EncodeError).Code(), aprs.RefusalInvalidCharacter)
+	_, err = st.Telemetry(1).Analog(v(1), v(2), v(3), v(4), v(5), v(6)).Build()
+	eq(t, err.(*aprs.EncodeError).Code(), aprs.RefusalTooLong)
+}

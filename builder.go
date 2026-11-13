@@ -771,10 +771,8 @@ func (b TelemetryBuilder) Data() (Data, error) {
 	if b.sequence > 999 {
 		return nil, newEncodeError(RefusalValueOutOfRange, "a telemetry sequence is 0-999, three digits (APRS12c ch. 13)")
 	}
-	if len(b.analog) > 5 {
-		return nil, newEncodeError(RefusalTooLong, "a telemetry report carries at most 5 analog values (APRS12c ch. 13)")
-	}
-	analog := make([]*float64, 5)
+	// More than 5 values go to the encoder as given, which names that (too-long) in its own order.
+	analog := make([]*float64, max(5, len(b.analog)))
 	copy(analog, b.analog)
 	return Telemetry{Sequence: pad3(uint32(b.sequence)), Analog: analog, Bits: Ptr(b.bits), Comment: b.comment}, nil
 }
