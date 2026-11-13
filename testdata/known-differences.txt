@@ -1,0 +1,4 @@
+# Checks the vectors runner skips on purpose, one per line: the check name (<check>::<case id>),
+# then the reason. Each runs as a skipped test with its reason.
+#
+# None at present.

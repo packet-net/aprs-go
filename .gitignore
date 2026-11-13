@@ -1,0 +1,3 @@
+/aprs-diffdump
+*.jsonl.gz
+*.hex.gz
