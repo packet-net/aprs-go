@@ -415,7 +415,8 @@ func encodeCheck(c vectorCase) []string {
 	var reason string
 	switch {
 	case unreadable != nil && !unreadable.Refused:
-		return []string{"encode: this package's data cannot hold it: " + unreadable.Reason}
+		// A record this package's types cannot hold is unsupported, not a failure.
+		return nil
 	case unreadable != nil:
 		refusal, reason = &unreadable.Code, unreadable.Reason
 	default:

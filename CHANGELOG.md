@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-Round 3 of the conformance vectors (pinned at e0e8e39).
+Round 3 of the conformance vectors (pinned at cb5dcc0).
+
+- A lower-case locator in a Mic-E report or a Maidenhead beacon is `malformed`, as in a status. Base-91 telemetry on a weather report is `field-not-allowed` and its own checks do not run. A course or speed beside a compressed weather report's wind keeps its own checks (a course of 0 is `value-has-no-form`). Builders refuse in the encoder's order: out of range comes before the ambiguity edge's `value-has-no-form`.
 
 - A decoder reads at most four levels of third-party header; a fifth `}` makes the packet holding it `unrecognized` with `error:invalid-third-party`.
 - An AX.25 address holding anything but upper-case letters and digits (a lower-case letter is still tolerated) is `invalid-address`, and a call of spaces only is an empty source (`invalid-address`), destination (`empty-destination`) or digipeater (`empty-path-entry`).

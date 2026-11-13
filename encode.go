@@ -264,7 +264,8 @@ func encodePositioned(out []byte, f *Positioned, p *pending) ([]byte, *EncodeErr
 	}
 	textAt := len(out)
 	var trailer []byte
-	if f.Telemetry != nil {
+	// A weather report has no place for telemetry (field-not-allowed), so its checks do not run.
+	if f.Telemetry != nil && f.Weather == nil {
 		trailer = telemetryInto(trailer, f.Telemetry, p)
 	}
 	if f.DAO != nil {
@@ -412,6 +413,10 @@ func compressedCS(out []byte, f *Positioned, p *pending) ([]byte, bool) {
 			p.note(newEncodeError(RefusalMissingField, "the cs bytes carry the wind as a direction and a speed together, so both are needed"))
 		}
 		c, s = windCode(wind, p)
+		// A course or speed wanting the same cs bytes keeps its own checks.
+		if courseSpeed {
+			courseSpeedCode(f, p)
+		}
 	case f.RangeMiles != nil:
 		if courseSpeed {
 			p.note(newEncodeError(RefusalExtensionConflict, "the cs bytes carry a course and speed or a range, not both (APRS12c ch. 9)"))

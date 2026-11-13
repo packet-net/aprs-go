@@ -255,7 +255,13 @@ func (c *common) positioned(what string, micE bool) (Positioned, error) {
 	// blanked, and the box's centre is what a decoder reads (vectors README, Builder rules). A
 	// compressed report refuses ambiguity whatever the box, so it keeps the position as given.
 	if c.ambiguity >= 1 && c.ambiguity <= 4 && !fields.Compressed {
-		fields.Position = Position{Latitude: boxCentre(position.Latitude, c.ambiguity), Longitude: boxCentre(position.Longitude, c.ambiguity), Ambiguity: c.ambiguity}
+		lat, lon := boxCentre(position.Latitude, c.ambiguity), boxCentre(position.Longitude, c.ambiguity)
+		// A box centred past 90 or 180 degrees has no form: the position is kept as given, and
+		// the encoder names that in its own order, after anything out of range.
+		if (math.Abs(position.Latitude) <= 90 && math.Abs(lat) > 90) || (math.Abs(position.Longitude) <= 180 && math.Abs(lon) > 180) {
+			lat, lon = position.Latitude, position.Longitude
+		}
+		fields.Position = Position{Latitude: lat, Longitude: lon, Ambiguity: c.ambiguity}
 	} else {
 		fields.Position = Position{Latitude: position.Latitude, Longitude: position.Longitude, Ambiguity: c.ambiguity}
 	}
@@ -292,21 +298,6 @@ func (c *common) positioned(what string, micE bool) (Positioned, error) {
 		fields.Frequency = &frequency
 	}
 	return fields, nil
-}
-
-// boxFault: a position inside the range whose ambiguity box is centred beyond it has no form. A
-// form that writes ambiguity (uncompressed and Mic-E) refuses it; a compressed report refuses
-// ambiguity itself.
-func (c *common) boxFault(fields *Positioned) error {
-	if c.position == nil || fields.Compressed || c.ambiguity < 1 || c.ambiguity > 4 {
-		return nil
-	}
-	p := *c.position
-	latitude, longitude := boxCentre(p.Latitude, c.ambiguity), boxCentre(p.Longitude, c.ambiguity)
-	if (math.Abs(p.Latitude) <= 90 && math.Abs(latitude) > 90) || (math.Abs(p.Longitude) <= 180 && math.Abs(longitude) > 180) {
-		return newEncodeError(RefusalValueHasNoForm, "an ambiguous position at 90 degrees latitude or 180 degrees longitude has a box centred past it")
-	}
-	return nil
 }
 
 // boxCentre gives the centre of the box that holds degrees once ambiguity (1-4) digits are
@@ -351,9 +342,6 @@ func (b PositionBuilder) Data() (Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := b.common.boxFault(&fields); err != nil {
-		return nil, err
-	}
 	return PositionReport{Timestamp: b.timestamp, Messaging: b.messaging, Fields: fields}, nil
 }
 
@@ -394,12 +382,6 @@ func (b ObjectBuilder) Data() (Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	// A name the encoder refuses is named first.
-	if name := []byte(b.name); len(name) >= 1 && len(name) <= 9 && isPrintableASCII(name) {
-		if err := b.common.boxFault(&fields); err != nil {
-			return nil, err
-		}
-	}
 	if b.timestamp == nil {
 		return nil, newEncodeError(RefusalMissingField, "an object needs a timestamp: call Timestamp(...) or Permanent()")
 	}
@@ -429,12 +411,6 @@ func (b ItemBuilder) Data() (Data, error) {
 	fields, err := b.common.positioned("an item", false)
 	if err != nil {
 		return nil, err
-	}
-	// A name the encoder refuses is named first.
-	if name := []byte(b.name); len(name) >= 3 && len(name) <= 9 && isPrintableASCII(name) && !contains(name, '!') && !contains(name, '_') {
-		if err := b.common.boxFault(&fields); err != nil {
-			return nil, err
-		}
 	}
 	return ItemReport{Name: b.name, Killed: b.killed, Fields: fields}, nil
 }
@@ -469,9 +445,6 @@ func (b MicEBuilder) Messaging() MicEBuilder {
 func (b MicEBuilder) Data() (Data, error) {
 	fields, err := b.common.positioned("a Mic-E report", true)
 	if err != nil {
-		return nil, err
-	}
-	if err := b.common.boxFault(&fields); err != nil {
 		return nil, err
 	}
 	// The type code says whether the station can message (APRS 1.2 Mic-E type codes).

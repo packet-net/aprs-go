@@ -652,7 +652,7 @@ func encodeMicE(r *MicEReport) (Address, []byte, *EncodeError) {
 	}
 	if r.Locator != nil {
 		b := []byte(*r.Locator)
-		if n, ok := locatorLen(append(append([]byte(nil), b...), '/', 'G')); !ok || n != len(b) {
+		if n, ok := locatorLen(append(append([]byte(nil), b...), '/', 'G')); !ok || n != len(b) || *r.Locator != asciiUpper(*r.Locator) {
 			pend.note(newEncodeError(RefusalMalformed, "a grid locator is 4 or 6 characters, e.g. IO91 or IO91SX"))
 		}
 		out = append(out, b...)

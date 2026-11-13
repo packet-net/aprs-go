@@ -587,8 +587,8 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 		return encodeNMEA(&d)
 	case MaidenheadBeacon:
 		p := &pending{}
-		if !isLocator([]byte(d.Locator)) {
-			p.note(newEncodeError(RefusalMalformed, "a grid locator is 4 or 6 characters, e.g. IO91 or IO91SX"))
+		if !isLocator([]byte(d.Locator)) || d.Locator != asciiUpper(d.Locator) {
+			p.note(newEncodeError(RefusalMalformed, "a grid locator is 4 or 6 upper-case characters, e.g. IO91 or IO91SX"))
 		}
 		p.run(printable(d.Comment, "a beacon comment"))
 		if err := p.finish(); err != nil {
