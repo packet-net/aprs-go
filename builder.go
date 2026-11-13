@@ -39,24 +39,24 @@ func NewStation(source string) (Station, error) {
 }
 
 // To gives this station with another destination address, usually the application's allocated
-// tocall.
+// tocall. On an error it gives the station unchanged.
 func (s Station) To(destination string) (Station, error) {
 	d, err := NewAddress(destination)
 	if err != nil {
-		return Station{}, err
+		return s, err
 	}
 	s.destination = d
 	return s, nil
 }
 
 // Via gives this station with a digipeater path, such as Via("WIDE1-1", "WIDE2-1"), replacing
-// any set before.
+// any set before. On an error it gives the station unchanged.
 func (s Station) Via(path ...string) (Station, error) {
 	entries := make([]PathEntry, 0, len(path))
 	for _, p := range path {
 		a, err := NewAddress(p)
 		if err != nil {
-			return Station{}, err
+			return s, err
 		}
 		entries = append(entries, PathEntry{Address: a})
 	}

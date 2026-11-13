@@ -70,7 +70,9 @@ me, err := aprs.NewStation("M0LTE-9")
 if err != nil {
 	return err
 }
-me, _ = me.Via("WIDE1-1", "WIDE2-1")
+if me, err = me.Via("WIDE1-1", "WIDE2-1"); err != nil {
+	return err
+}
 
 beacon, err := me.Position(51.4543, -0.9781).Symbol(aprs.SymbolCar).CourseDegrees(88).SpeedKnots(36).AltitudeFeet(120).Comment("Mobile").Build()
 // M0LTE-9>APZ001,WIDE1-1,WIDE2-1:!5127.26N/00058.69W>088/036/A=000120Mobile

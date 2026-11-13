@@ -443,3 +443,73 @@ func TestParseOptionsZeroValueIsLenientAndEveryCodeIsSafe(t *testing.T) {
 	eq(t, aprs.Lenient.Without(aprs.Code(250)), aprs.Lenient)
 	eq(t, aprs.Severity(250).String(), "severity-250")
 }
+
+// To and Via keep the station on an error, and an empty address is never written.
+func TestAnEmptyAddressIsRefused(t *testing.T) {
+	base := me(t)
+	via, err := base.Via("WIDE1-1", "bad*")
+	if err == nil || via.String() != base.String() {
+		t.Errorf("Via gave %s, %v", via, err)
+	}
+	to, err := base.To("not a call")
+	if err == nil || to.String() != base.String() {
+		t.Errorf("To gave %s, %v", to, err)
+	}
+	_, err = aprs.NewPacket(aprs.Address{}, aprs.MustAddress("APZ001"), nil, aprs.Status{Text: "x"})
+	eq(t, refusal(t, err), aprs.RefusalInvalidAddress)
+	_, err = aprs.NewPacket(aprs.MustAddress("N0CALL"), aprs.Address{}, nil, aprs.Status{Text: "x"})
+	eq(t, refusal(t, err), aprs.RefusalInvalidAddress)
+	_, err = aprs.NewPacket(aprs.MustAddress("N0CALL"), aprs.MustAddress("APZ001"), []aprs.PathEntry{{}}, aprs.Status{Text: "x"})
+	eq(t, refusal(t, err), aprs.RefusalInvalidAddress)
+	var zero aprs.Station
+	_, err = zero.Status("x").Build()
+	eq(t, refusal(t, err), aprs.RefusalInvalidAddress)
+}
+
+// Data no decoder could give is refused before anything is written: an enumeration value
+// outside its type, or text that is not UTF-8. A pointer to data is the data it points to.
+func TestHandBuiltDataIsCheckedFirst(t *testing.T) {
+	pos := func() aprs.Positioned {
+		return aprs.Positioned{Position: aprs.Position{Latitude: 51, Longitude: -1}, Symbol: aprs.SymbolCar}
+	}
+	f := pos()
+	f.Frequency = &aprs.VoiceFrequency{MHz: 145.5, Tone: aprs.Ptr(aprs.Tone(9)), ToneValue: aprs.Ptr(uint16(100))}
+	_, err := aprs.Encode(aprs.PositionReport{Fields: f})
+	eq(t, refusal(t, err), aprs.RefusalValueOutOfRange)
+	f = pos()
+	f.DAO = &aprs.DAO{Datum: 'W', Precision: aprs.DAOPrecision(9)}
+	_, err = aprs.Encode(aprs.PositionReport{Fields: f})
+	eq(t, refusal(t, err), aprs.RefusalValueOutOfRange)
+	f = pos()
+	f.Symbol = aprs.Symbol{Table: '\\', Code: 'l'}
+	f.Area = &aprs.AreaObject{Shape: aprs.AreaShape(99)}
+	_, err = aprs.Encode(aprs.PositionReport{Fields: f})
+	eq(t, refusal(t, err), aprs.RefusalValueOutOfRange)
+	_, err = aprs.Encode(aprs.RawWeather{Format: aprs.RawWeatherFormat(9), Data: "x"})
+	eq(t, refusal(t, err), aprs.RefusalValueOutOfRange)
+	_, err = aprs.NewPacket(aprs.MustAddress("N0CALL"), aprs.MustAddress("APZ001"), nil, aprs.MicEReport{MicEMessage: -3, Fields: pos()})
+	eq(t, refusal(t, err), aprs.RefusalValueOutOfRange)
+
+	_, err = aprs.Encode(aprs.Message{Addressee: "N0CALL", Text: "\xff\xfe"})
+	eq(t, refusal(t, err), aprs.RefusalInvalidCharacter)
+	f = pos()
+	f.Comment = "\xff\x80"
+	_, err = aprs.Encode(aprs.PositionReport{Fields: f})
+	eq(t, refusal(t, err), aprs.RefusalInvalidCharacter)
+
+	report := aprs.PositionReport{Fields: pos()}
+	byValue, err := aprs.Encode(report)
+	eq(t, err, nil)
+	byPointer, err := aprs.Encode(&report)
+	eq(t, err, nil)
+	eq(t, string(byPointer), string(byValue))
+	p, err := aprs.NewPacket(aprs.MustAddress("N0CALL"), aprs.MustAddress("APZ001"), nil, &report)
+	eq(t, err, nil)
+	_, isValue := p.Data.(aprs.PositionReport)
+	eq(t, isValue, true)
+	var none *aprs.PositionReport
+	_, err = aprs.Encode(none)
+	eq(t, refusal(t, err), aprs.RefusalNotEncodable)
+	_, err = aprs.Encode(nil)
+	eq(t, refusal(t, err), aprs.RefusalNotEncodable)
+}

@@ -11,7 +11,8 @@ import (
 
 // Encode gives the information field for data. It fails, with an *EncodeError naming the field,
 // when the data cannot be written as APRS12c allows. Mic-E data is refused, since it carries half
-// its position in the destination address: use NewPacket, which works that address out.
+// its position in the destination address: use NewPacket, which works that address out. data may
+// also be a pointer to one of the data types.
 func Encode(data Data) ([]byte, error) {
 	out, err := encode(data)
 	if err != nil {
@@ -21,6 +22,15 @@ func Encode(data Data) ([]byte, error) {
 }
 
 func encode(data Data) ([]byte, *EncodeError) {
+	data, err := prepare(data)
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := data.(MicEReport); !ok {
+		if err := validate(data); err != nil {
+			return nil, err
+		}
+	}
 	switch d := data.(type) {
 	case PositionReport:
 		return encodePositionReport(&d)

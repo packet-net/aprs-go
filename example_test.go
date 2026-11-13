@@ -83,7 +83,9 @@ func ExampleStation() {
 	if err != nil {
 		panic(err)
 	}
-	me, _ = me.Via("WIDE1-1", "WIDE2-1")
+	if me, err = me.Via("WIDE1-1", "WIDE2-1"); err != nil {
+		panic(err)
+	}
 
 	beacon, _ := me.Position(51.4543, -0.9781).Symbol(aprs.SymbolCar).CourseDegrees(88).SpeedKnots(36).AltitudeFeet(120).Comment("Mobile").Build()
 	fmt.Println(beacon)

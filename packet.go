@@ -387,7 +387,9 @@ func decodeWithContext(ctx *context, source, destination Address, path []PathEnt
 
 // NewPacket builds a packet from data, encoding its information field. For Mic-E data the
 // destination address is worked out from the report (it carries the latitude, message code and
-// digipeat path, APRS12c ch. 10), and destination is not used. A refusal is an *EncodeError.
+// digipeat path, APRS12c ch. 10), and destination is not used. An empty address (the zero
+// Address) is refused with RefusalInvalidAddress. data may also be a pointer to one of the data
+// types. A refusal is an *EncodeError.
 func NewPacket(source, destination Address, path []PathEntry, data Data) (*Packet, error) {
 	p, err := newPacket(source, destination, path, data)
 	if err != nil {
@@ -397,19 +399,36 @@ func NewPacket(source, destination Address, path []PathEntry, data Data) (*Packe
 }
 
 func newPacket(source, destination Address, path []PathEntry, data Data) (*Packet, *EncodeError) {
+	data, err := prepare(data)
+	if err != nil {
+		return nil, err
+	}
+	pend := &pending{}
+	// The zero Address is empty, which no header can carry.
+	_, micE := data.(MicEReport)
+	empty := source.text == "" || (destination.text == "" && !micE)
+	for _, e := range path {
+		empty = empty || e.Address.text == ""
+	}
+	if empty {
+		pend.note(newEncodeError(RefusalInvalidAddress, "a header address is empty: give the source, destination and each path entry an address"))
+	}
 	var information []byte
 	if m, ok := data.(MicEReport); ok {
-		d, info, err := encodeMicE(&m)
-		if err != nil {
-			return nil, err
+		if pend.run(validate(m)) {
+			d, info, err := encodeMicE(&m)
+			if pend.run(err) {
+				destination, information = d, info
+			}
 		}
-		destination, information = d, info
 	} else {
 		info, err := encode(data)
-		if err != nil {
-			return nil, err
+		if pend.run(err) {
+			information = info
 		}
-		information = info
+	}
+	if err := pend.finish(); err != nil {
+		return nil, err
 	}
 	path = append([]PathEntry(nil), path...)
 	decoded := Decode(source, destination, path, information, Strict)
