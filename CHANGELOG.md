@@ -2,17 +2,28 @@
 
 ## Unreleased
 
-Round 3 of the conformance vectors (pinned at cb5dcc0).
+Round 3 of the conformance vectors (pinned at f2f6ab5).
 
-- A lower-case locator in a Mic-E report or a Maidenhead beacon is `malformed`, as in a status. Base-91 telemetry on a weather report is `field-not-allowed` and its own checks do not run. A course or speed beside a compressed weather report's wind keeps its own checks (a course of 0 is `value-has-no-form`). Builders refuse in the encoder's order: out of range comes before the ambiguity edge's `value-has-no-form`.
+### Behaviour changes
 
-- A decoder reads at most four levels of third-party header; a fifth `}` makes the packet holding it `unrecognized` with `error:invalid-third-party`.
-- An AX.25 address holding anything but upper-case letters and digits (a lower-case letter is still tolerated) is `invalid-address`, and a call of spaces only is an empty source (`invalid-address`), destination (`empty-destination`) or digipeater (`empty-path-entry`).
-- An ambiguous position is cut to its box, not rounded, so a latitude just under 90 degrees is written in the box below the edge, in an uncompressed report and in Mic-E.
-- A wind direction in a compressed weather report is judged in whole degrees before it is rounded to the 4-degree step: 360.5 and -0.5 are `value-out-of-range`.
-- More than five analog values in a telemetry report or comment telemetry are `too-long`; a status grid locator that is not upper case is `malformed`; a field that is wanted twice (a PHG, RNG or DFS that loses the one data extension, or a course, speed or wind beside a range or a GGA altitude in the cs bytes) keeps its own range checks, so its refusal can outrank `extension-conflict`.
-- An ambiguous position whose box would be centred past 90 degrees latitude or 180 degrees longitude is `value-has-no-form`; a reply-ack that is wrong on its own is `invalid-message-id` even with no message ID; undecoded data inside a third-party packet is named before a header fault in the dump tool's reader.
-- `StatusBuilder.Locator` writes a lower-case locator in upper case, as before; the encoder, given a lower-case locator, refuses.
+- A lower-case grid locator is refused as `malformed` by `Encode` in a status, a Mic-E report and a Maidenhead beacon (it used to be written in upper case). `StatusBuilder.Locator` still writes it in upper case.
+- An AX.25 address holding anything but upper-case letters and digits (punctuation, a space before the last character, a control character) is now `invalid-address`; a lower-case letter is still tolerated.
+- The decoder reads at most four levels of third-party header, and the encoder refuses a chain nested deeper with `invalid-third-party-header`.
+- More than five analog values in a telemetry report or in comment telemetry are `too-long`.
+
+### Changes
+
+- Third-party packets nest at most four deep: a fifth `}` makes the packet holding it `unrecognized` with `error:invalid-third-party`.
+- A call of spaces only in an AX.25 frame is an empty source (`invalid-address`), destination (`empty-destination`) or digipeater (`empty-path-entry`, dropped from the path).
+- An ambiguous position is cut to its box, not rounded, in uncompressed and Mic-E reports, so a value just under 90 or 180 degrees is written.
+- An ambiguous position whose box would be centred past 90 degrees latitude or 180 degrees longitude is `value-has-no-form`.
+- A compressed wind direction is judged in whole degrees before it is rounded to the 4-degree step: 360.5 and -0.5 are `value-out-of-range`.
+- A field wanted twice (a PHG, RNG or DFS that loses the one data extension, or a course, speed or wind beside a range or a GGA altitude in the cs bytes) keeps its own range checks, so its refusal can outrank `extension-conflict`.
+- A course or speed beside a compressed weather report's wind keeps its own checks (a course of 0 is `value-has-no-form`).
+- Base-91 telemetry on a weather report is `field-not-allowed` and its own checks do not run.
+- A reply-ack that is wrong on its own is `invalid-message-id` even with no message ID.
+- Builders refuse in the encoder's order: out of range comes before the ambiguity edge's `value-has-no-form`, and the telemetry builder passes extra analog values to the encoder.
+- The dump tool's reader names undecoded inner data in a third-party packet before a header fault, and reads an absent positioned symbol as an empty one (`invalid-symbol`).
 
 ## 1.0.1 (2026-11-13)
 

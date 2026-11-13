@@ -112,7 +112,7 @@ func encodeStatus(s *Status) ([]byte, *EncodeError) {
 	switch {
 	case s.Locator != nil && s.Symbol != nil:
 		p.run(checkSymbol(*s.Symbol))
-		out = append(out, asciiUpper(*s.Locator)...)
+		out = append(out, *s.Locator...)
 		out = append(out, byte(s.Symbol.Table), byte(s.Symbol.Code))
 		if s.Text != "" || s.Beam != nil {
 			out = append(out, ' ')

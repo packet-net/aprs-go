@@ -861,6 +861,19 @@ func readKind(o *keys, kind string) (aprs.Data, *Unreadable) {
 }
 
 func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
+	// Count the levels of the input iteratively before recursing into any of them.
+	depth := 1
+	for cur := o.o; depth <= 5; depth++ {
+		inner, _ := cur["packet"].(map[string]any)
+		data, _ := inner["data"].(map[string]any)
+		if t, _ := data["type"].(string); t != "third-party" {
+			break
+		}
+		cur = data
+	}
+	if depth > 4 {
+		return nil, refused(aprs.RefusalInvalidThirdPartyHeader, "third-party packets nest at most four deep")
+	}
 	// The inner packet as the neutral form gives it: its source may be any third-party source
 	// (APRS12c ch. 17), and its diagnostics are part of the data. This package keeps the inner
 	// information field as received, which the neutral form does not carry, so it is the inner
@@ -1088,10 +1101,11 @@ func readPositioned(o *keys) (aprs.Positioned, *Unreadable) {
 	if err != nil {
 		return f, err
 	}
-	if symbol == nil {
-		return f, o.missing("symbol")
+	// A symbol the neutral data leaves out is empty text: the zero Symbol, which the encoder
+	// refuses as invalid-symbol.
+	if symbol != nil {
+		f.Symbol = *symbol
 	}
-	f.Symbol = *symbol
 	if f.Compressed, err = o.flag("compressed"); err != nil {
 		return f, err
 	}

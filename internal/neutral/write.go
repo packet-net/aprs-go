@@ -138,6 +138,14 @@ func symbol(s aprs.Symbol) string {
 
 // Data gives data in the neutral form.
 func Data(d aprs.Data) map[string]any {
+	return dataAt(d, 0)
+}
+
+// maxNesting is how many third-party levels the neutral form is written for; a caller-built
+// chain deeper than a decoder reads is cut there, so conversion never recurses far.
+const maxNesting = 5
+
+func dataAt(d aprs.Data, depth int) map[string]any {
 	switch x := d.(type) {
 	case aprs.PositionReport:
 		o := newObj("position")
@@ -257,11 +265,14 @@ func Data(d aprs.Data) map[string]any {
 		}
 		return newObj("capabilities").put("capabilities", items)
 	case aprs.ThirdParty:
+		if depth >= maxNesting {
+			return newObj("unrecognized").put("reason", "malformed")
+		}
 		p := x.Packet
 		// A header's source and destination are always written, even when empty.
 		inner := obj{"source": p.Source.String(), "destination": p.Destination.String()}
 		inner.put("path", path(p.Path))
-		inner.put("data", Data(p.Data)).put("diagnostics", strs(Diagnostics(p.Diagnostics)))
+		inner.put("data", dataAt(p.Data, depth+1)).put("diagnostics", strs(Diagnostics(p.Diagnostics)))
 		return newObj("third-party").put("packet", map[string]any(inner))
 	case aprs.UserDefined:
 		data := make([]rune, len(x.Data))

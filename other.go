@@ -662,6 +662,35 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 			}
 		}
 	case ThirdParty:
+		// Walk the chain iteratively, counting levels before anything else is looked at: a
+		// caller-built chain thousands deep is refused without recursion.
+		depth := 0
+		for cur := Data(d); ; {
+			var tp ThirdParty
+			switch x := cur.(type) {
+			case ThirdParty:
+				tp = x
+			case *ThirdParty:
+				if x == nil {
+					depth = -1
+				} else {
+					tp = *x
+				}
+			default:
+				depth = -1
+			}
+			if depth < 0 {
+				break
+			}
+			depth++
+			if depth > maxThirdPartyDepth {
+				return nil, newEncodeError(RefusalInvalidThirdPartyHeader, "third-party packets nest at most four deep")
+			}
+			if tp.Packet == nil {
+				break
+			}
+			cur = tp.Packet.Data
+		}
 		if d.Packet == nil {
 			return nil, newEncodeError(RefusalMissingField, "a third-party packet carries a packet")
 		}

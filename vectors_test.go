@@ -415,8 +415,12 @@ func encodeCheck(c vectorCase) []string {
 	var reason string
 	switch {
 	case unreadable != nil && !unreadable.Refused:
-		// A record this package's types cannot hold is unsupported, not a failure.
-		return nil
+		// The one record Go's types cannot hold, by name; anything else the reader cannot hold is
+		// a failure, not a skip.
+		if c["id"] == "encode/nested-third-party-ending-in-undecoded-data" {
+			return nil // undecoded data has no neutral form of its bytes (not-encodable)
+		}
+		return []string{"encode: this package's data cannot hold it: " + unreadable.Reason}
 	case unreadable != nil:
 		refusal, reason = &unreadable.Code, unreadable.Reason
 	default:
