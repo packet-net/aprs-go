@@ -212,15 +212,17 @@ type Packet struct {
 // an unusable header, a *HeaderError; anything wrong in the information field is in the packet's
 // diagnostics.
 func DecodeTNC2(line []byte, options ParseOptions) (*Packet, error) {
-	p, err := decodeTNC2Line(line, options, false)
+	p, err := decodeTNC2Line(line, options, 0)
 	if err != nil {
 		return nil, err
 	}
 	return p, nil
 }
 
-func decodeTNC2Line(line []byte, options ParseOptions, thirdParty bool) (*Packet, *HeaderError) {
+func decodeTNC2Line(line []byte, options ParseOptions, depth int) (*Packet, *HeaderError) {
+	thirdParty := depth > 0
 	ctx := newContext(options)
+	ctx.depth = depth
 	colon := indexByte(line, ':')
 	if colon < 0 {
 		ctx.error(CodeInvalidHeader, "no ':' ends the header (SOURCE>DEST[,PATH]:)", none)
@@ -358,7 +360,14 @@ func decodeAX25(frame []byte, options ParseOptions) (*Packet, *HeaderError) {
 
 	decoded := make([]Address, 0, len(addresses))
 	for i, b := range addresses {
-		a, err := ax25Address(ctx, b, i*7)
+		role := rolePath
+		switch i {
+		case 0:
+			role = roleDestination
+		case 1:
+			role = roleSource
+		}
+		a, err := ax25Address(ctx, b, i*7, role)
 		if err != nil {
 			return nil, err
 		}
@@ -368,6 +377,9 @@ func decodeAX25(frame []byte, options ParseOptions) (*Packet, *HeaderError) {
 	destination, source := decoded[0], decoded[1]
 	var path []PathEntry
 	for i, b := range addresses[2:] {
+		if decoded[i+2].text == "" {
+			continue
+		}
 		path = append(path, PathEntry{Address: decoded[i+2], Used: b[6]&0x80 != 0})
 	}
 	return decodeWithContext(ctx, source, destination, path, append([]byte(nil), frame[at+2:]...)), nil
@@ -554,7 +566,15 @@ func headerAddress(ctx *context, text string) (Address, *HeaderError) {
 	return Address{}, ctx.headerError()
 }
 
-func ax25Address(ctx *context, b []byte, offset int) (Address, *HeaderError) {
+type addressRole int
+
+const (
+	roleSource addressRole = iota
+	roleDestination
+	rolePath
+)
+
+func ax25Address(ctx *context, b []byte, offset int, role addressRole) (Address, *HeaderError) {
 	chars := make([]byte, 6)
 	for i := 0; i < 6; i++ {
 		chars[i] = b[i] >> 1
@@ -579,25 +599,38 @@ func ax25Address(ctx *context, b []byte, offset int) (Address, *HeaderError) {
 		call = call[:nulStart]
 	}
 	if len(call) == 0 {
-		ctx.error(CodeInvalidAddress, "an AX.25 address is empty", offset)
-		return Address{}, ctx.headerError()
-	}
-	plain := true
-	for _, c := range call {
-		if !isUpper(c) && !isDigit(c) {
-			plain = false
-		}
-	}
-	if !plain {
-		for _, c := range call {
-			if !isGraphic(c) {
-				ctx.error(CodeInvalidAddress, "an AX.25 address has characters that cannot be shown", offset)
+		// A call of spaces only is empty, as an empty TNC2 address is: an empty source is
+		// unusable, an empty destination or digipeater is tolerated.
+		switch role {
+		case roleDestination:
+			if !ctx.tolerate(CodeEmptyDestination, "the destination address is empty (UAP 5.2)", offset) {
 				return Address{}, ctx.headerError()
 			}
-		}
-		if !ctx.tolerate(CodeInvalidAX25AddressCharacters, "an AX.25 address has characters other than upper-case letters and digits", offset) {
+		case rolePath:
+			if !ctx.tolerate(CodeEmptyPathEntry, "the path has an empty entry (UAP 5.6)", offset) {
+				return Address{}, ctx.headerError()
+			}
+		default:
+			ctx.error(CodeInvalidAddress, "an AX.25 address is empty", offset)
 			return Address{}, ctx.headerError()
 		}
+		return Address{}, nil
+	}
+	lower := false
+	for _, c := range call {
+		switch {
+		case isUpper(c) || isDigit(c):
+		case c >= 'a' && c <= 'z':
+			lower = true
+		default:
+			// Anything else (punctuation, a space inside, a control character) would write a
+			// TNC2 header that reads back as a different one.
+			ctx.error(CodeInvalidAddress, "an AX.25 address is upper-case letters and digits (AX.25 2.2 section 3.12)", offset)
+			return Address{}, ctx.headerError()
+		}
+	}
+	if lower && !ctx.tolerate(CodeInvalidAX25AddressCharacters, "an AX.25 address has lower-case letters", offset) {
+		return Address{}, ctx.headerError()
 	}
 	text := string(call)
 	if ssid := (b[6] >> 1) & 0x0F; ssid != 0 {

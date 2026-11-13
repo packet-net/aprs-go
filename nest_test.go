@@ -9,7 +9,8 @@ import (
 )
 
 // Third-party packets nested inside each other share the outer packet's information field, so a
-// deeply nested line costs memory in proportion to its length, not its square.
+// deeply nested line costs memory in proportion to its length, not its square, and at most four
+// levels are read.
 func TestNestedThirdPartyMemoryIsLinear(t *testing.T) {
 	const levels = 200000 // a 1 MB line
 	line := append(bytes.Repeat([]byte("A>B:}"), levels), []byte("A>B:>hi")...)
@@ -35,6 +36,10 @@ func TestNestedThirdPartyMemoryIsLinear(t *testing.T) {
 		p = tp.Packet
 		depth++
 	}
-	eq(t, depth, levels)
-	eq(t, p.Data.(aprs.Status).Text, "hi")
+	// Four levels are read; the fifth } is not (the packet whose information field it starts is
+	// unrecognized).
+	eq(t, depth, 4)
+	if _, ok := p.Data.(aprs.Unrecognized); !ok {
+		t.Errorf("the fifth level is %T, expected Unrecognized", p.Data)
+	}
 }

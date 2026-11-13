@@ -343,9 +343,18 @@ func coordinate(value float64, degreeDigits int, ambiguity uint8, dao *bool) ([]
 	}
 	// Rounding then blanking keeps the box the position is in, and a decoded position (the centre
 	// of its box) writes back the same digits.
-	units := toU64(roundSteps(value * 60 * perMinute))
-	extra := byte(units % extraBase)
-	units /= extraBase
+	var units uint64
+	var extra byte
+	if ambiguity > 0 && dao == nil {
+		// An ambiguous position is cut to its box, not rounded and then cut again: a value within
+		// a rounding step of 90 or 180 degrees is in the box below the edge (vectors
+		// interpretations.md, the ambiguity box).
+		units = cutToBox(value, ambiguity)
+	} else {
+		units = toU64(roundSteps(value * 60 * perMinute))
+		extra = byte(units % extraBase)
+		units /= extraBase
+	}
 	// units is now hundredths of a minute.
 	degrees := units / 6000
 	hundredths := units % 6000
@@ -357,6 +366,14 @@ func coordinate(value float64, degreeDigits int, ambiguity uint8, dao *bool) ([]
 		text[i] = ' '
 	}
 	return text, extra
+}
+
+// cutToBox gives a position's hundredths of a minute cut to the start of its ambiguity box
+// (1-4 digits blanked). A value within 1e-6 of a box's edge below it, in boxes, is on the edge.
+func cutToBox(degrees float64, ambiguity uint8) uint64 {
+	size := [...]float64{1, 10, 100, 1000, 6000}[ambiguity]
+	boxes := math.Abs(degrees) * 6000 / size
+	return toU64(math.Floor(boxes+1e-6) * size)
 }
 
 // encodeCompressed writes a compressed position: table, latitude, longitude, symbol code. The cs

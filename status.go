@@ -104,11 +104,13 @@ func encodeStatus(s *Status) ([]byte, *EncodeError) {
 			p.note(newEncodeError(RefusalFieldNotAllowed, "a status report with a grid locator cannot have a timestamp (APRS12c ch. 16)"))
 		}
 	}
+	if s.Locator != nil && !(isLocator([]byte(*s.Locator)) && *s.Locator == asciiUpper(*s.Locator)) {
+		// Fixed-form text is malformed whatever else is wrong; an encoder writes a locator in
+		// upper case as given and does not fix its case.
+		p.note(newEncodeError(RefusalMalformed, "a grid locator is 4 or 6 upper-case characters, e.g. IO91 or IO91SX"))
+	}
 	switch {
 	case s.Locator != nil && s.Symbol != nil:
-		if !isLocator([]byte(*s.Locator)) {
-			p.note(newEncodeError(RefusalMalformed, "a grid locator is 4 or 6 characters, e.g. IO91 or IO91SX"))
-		}
 		p.run(checkSymbol(*s.Symbol))
 		out = append(out, asciiUpper(*s.Locator)...)
 		out = append(out, byte(s.Symbol.Table), byte(s.Symbol.Code))

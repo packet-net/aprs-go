@@ -478,22 +478,32 @@ func encodeMicE(r *MicEReport) (Address, []byte, *EncodeError) {
 	// Latitude digits into the destination, blanked for ambiguity: rounding then blanking keeps
 	// the box the position is in, and a decoded position (the centre of its box) writes back the
 	// same digits.
-	latUnits := toU64(roundSteps(absFloat(p.Latitude) * 60 * perMinute))
-	latExtra := byte(latUnits % extraBase)
-	latUnits /= extraBase
+	var latUnits uint64
+	var latExtra byte
+	if p.Ambiguity > 0 {
+		// Cut to the box, not rounded and then cut again.
+		latUnits = cutToBox(p.Latitude, p.Ambiguity)
+	} else {
+		latUnits = toU64(roundSteps(absFloat(p.Latitude) * 60 * perMinute))
+		latExtra = byte(latUnits % extraBase)
+		latUnits /= extraBase
+	}
 	// The box, in hundredths of a minute, that each level of ambiguity blanks.
 	boxSize := [...]uint64{1, 10, 100, 1000, 6000}[p.Ambiguity]
 	if p.Ambiguity > 0 && latUnits/boxSize*boxSize+boxSize/2 > 90*6000 {
 		pend.note(newEncodeError(RefusalValueHasNoForm, "an ambiguous latitude whose box is centred past 90 degrees cannot be sent"))
 	}
 	latText := fmt.Sprintf("%02d%02d%02d", latUnits/6000, latUnits%6000/100, latUnits%100)
-	lonUnits := toU64(roundSteps(absFloat(p.Longitude) * 60 * perMinute))
-	lonExtra := byte(lonUnits % extraBase)
-	lonUnits /= extraBase
-	// The longitude digits the ambiguity makes a decoder ignore hold the centre it reports
-	// (vectors README, Mic-E).
+	var lonUnits uint64
+	var lonExtra byte
 	if p.Ambiguity > 0 {
-		lonUnits = lonUnits/boxSize*boxSize + boxSize/2
+		// The longitude digits the ambiguity makes a decoder ignore hold the centre it reports
+		// (vectors README, Mic-E), of the box the longitude is cut to.
+		lonUnits = cutToBox(p.Longitude, p.Ambiguity) + boxSize/2
+	} else {
+		lonUnits = toU64(roundSteps(absFloat(p.Longitude) * 60 * perMinute))
+		lonExtra = byte(lonUnits % extraBase)
+		lonUnits /= extraBase
 	}
 	lonDeg := uint32(lonUnits / 6000)
 	lonMin := uint32(lonUnits % 6000 / 100)

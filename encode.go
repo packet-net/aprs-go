@@ -404,7 +404,11 @@ func compressedCS(out []byte, f *Positioned, p *pending) ([]byte, bool) {
 			p.note(newEncodeError(RefusalMissingField, "the cs bytes carry the wind as a direction and a speed together, so both are needed"))
 		}
 		if wind.WindDirectionDegrees != nil {
-			if v, err := directionCode(*wind.WindDirectionDegrees, "wind direction"); err != nil {
+			// Whether the direction is in range is decided in whole degrees, as a course's is,
+			// and a direction in range is then rounded once to the 4-degree step.
+			if _, err := wholeDegrees(*wind.WindDirectionDegrees, "wind direction"); err != nil {
+				p.note(err)
+			} else if v, err := directionCode(*wind.WindDirectionDegrees, "wind direction"); err != nil {
 				p.note(err)
 			} else {
 				c = v
@@ -546,8 +550,42 @@ func three(out []byte, v *uint32, max uint32, what string) ([]byte, *EncodeError
 }
 
 // uncompressedExtension writes the 7-byte data extension of an uncompressed position; true if
-// there is one.
+// there is one. When several things want the one extension the first is written and the rest are
+// not, but each keeps its own checks: a PHG digit of 10 beside a course is out of range, not only
+// in conflict (interpretations.md, "Which refusal a record with two faults gets").
 func uncompressedExtension(out []byte, f *Positioned, p *pending) ([]byte, bool) {
+	out, written := writeExtension(out, f, p)
+	if !written {
+		return out, false
+	}
+	kinds := [...]func(g *Positioned){
+		func(g *Positioned) {
+			g.CourseDegrees, g.SpeedKnots, g.DFBearing, g.Storm = f.CourseDegrees, f.SpeedKnots, f.DFBearing, f.Storm
+		},
+		func(g *Positioned) { g.PHG = f.PHG },
+		func(g *Positioned) { g.RangeMiles = f.RangeMiles },
+		func(g *Positioned) { g.DFS = f.DFS },
+		func(g *Positioned) { g.Area = f.Area },
+	}
+	first := true
+	for _, kind := range kinds {
+		var only Positioned
+		only.Symbol = f.Symbol
+		kind(&only)
+		if _, ok := writeExtension(nil, &only, &pending{}); !ok {
+			continue
+		}
+		if first && f.Weather == nil {
+			first = false
+			continue
+		}
+		first = false
+		writeExtension(nil, &only, p)
+	}
+	return out, true
+}
+
+func writeExtension(out []byte, f *Positioned, p *pending) ([]byte, bool) {
 	var err *EncodeError
 	if w := f.Weather; w != nil {
 		var direction *uint32
@@ -859,7 +897,10 @@ func telemetryInto(out []byte, t *CommentTelemetry, p *pending) []byte {
 	if over {
 		p.note(newEncodeError(RefusalValueOutOfRange, "comment telemetry values are 0-8280"))
 	}
-	if len(t.Analog) == 0 || len(t.Analog) > 5 || (t.Digital != nil && len(t.Analog) != 5) {
+	if len(t.Analog) > 5 {
+		p.note(newEncodeError(RefusalTooLong, "comment telemetry has at most 5 analog values"))
+	}
+	if len(t.Analog) == 0 || (t.Digital != nil && len(t.Analog) != 5) {
 		p.note(newEncodeError(RefusalMalformed, "comment telemetry has 1-5 analog values, and the digital bits only after all five"))
 	}
 	out = append(out, '|')

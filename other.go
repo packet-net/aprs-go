@@ -474,11 +474,18 @@ func decodeCapabilities(ctx *context, info []byte) Data {
 	return Capabilities{Capabilities: items}
 }
 
+// maxThirdPartyDepth is how many third-party headers a decoder reads, one inside another.
+const maxThirdPartyDepth = 4
+
 // decodeThirdParty reads } and a whole TNC2 packet, decoded with the same options. Its source may
 // be any 1-9 printable ASCII characters other than > and : (APRS12c ch. 17); a defect its header
 // may tolerate is a warning on the inner packet, and rejects it when not tolerated.
 func decodeThirdParty(ctx *context, info []byte) Data {
-	inner, err := decodeTNC2Line(info[1:], ctx.options, true)
+	if ctx.depth >= maxThirdPartyDepth {
+		ctx.error(CodeInvalidThirdParty, "third-party packets nest at most four deep", 1)
+		return nil
+	}
+	inner, err := decodeTNC2Line(info[1:], ctx.options, ctx.depth+1)
 	if err != nil {
 		ctx.error(CodeInvalidThirdParty, "the third-party header is not SOURCE>DEST,PATH: (APRS12c ch. 17)", 1)
 		return nil
