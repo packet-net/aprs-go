@@ -33,12 +33,23 @@ const vectorsDir = "vectors"
 
 type vectorCase = map[string]any
 
+// vectorsMissing reports that the vectors submodule is not there. In a git clone that is a mistake
+// the person running the tests must fix, so it fails; a copy fetched through the module proxy
+// never has the submodule (the module zip leaves it out) and has no .git, so there it skips, loudly.
+func vectorsMissing(t *testing.T, what string) {
+	t.Helper()
+	const msg = "%s is missing: run 'git submodule update --init'"
+	if _, err := os.Stat(".git"); err == nil {
+		t.Fatalf(msg, what)
+	}
+	t.Skipf(msg+" (skipped only because this is not a git clone)", what)
+}
+
 func loadCases(t *testing.T) []vectorCase {
 	t.Helper()
 	files, err := filepath.Glob(filepath.Join(vectorsDir, "cases", "*.json"))
 	if err != nil || len(files) == 0 {
-		// A module download has no submodule; a clone needs 'git submodule update --init vectors'.
-		t.Skipf("%s/cases is missing: run 'git submodule update --init vectors'", vectorsDir)
+		vectorsMissing(t, vectorsDir+"/cases")
 	}
 	sort.Strings(files)
 	var cases []vectorCase

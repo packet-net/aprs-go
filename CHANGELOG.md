@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `Device` now has a `String` method giving "vendor model" (for example `Yaesu FTM-400DR`), the same as the Python library's `str(packet.device)`. Printing a `Device` used to show the raw struct.
+- The README's Mic-E and device snippet is now a tested example (`Example_micEDevice`); every other README snippet already was.
+- Tests: when the `vectors` submodule is missing in a git clone, the vectors tests now fail with a one-line message to run `git submodule update --init`, instead of skipping and reporting ok. A copy fetched through the module proxy (no `.git`, and the module zip never holds the submodule) still skips, with the same message.
+
 ## 1.1.0 (2026-11-14)
 
 Round 3 of the conformance vectors (pinned at 10d4e25).

@@ -376,7 +376,7 @@ func TestAStationIsAValue(t *testing.T) {
 func TestCodesMatchTheVectors(t *testing.T) {
 	text, err := os.ReadFile(filepath.Join(vectorsDir, "codes.json"))
 	if err != nil {
-		t.Skipf("%v: run 'git submodule update --init vectors'", err)
+		vectorsMissing(t, filepath.Join(vectorsDir, "codes.json"))
 	}
 	doc, err := neutral.Parse(text)
 	if err != nil {

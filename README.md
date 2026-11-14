@@ -121,7 +121,8 @@ Mic-E carries half its position in the destination address, so `NewPacket` works
 
 ```go
 packet, _ := aprs.DecodeTNC2([]byte("N1JCM-9>TRQP7T,WA1PLE-4*:`c'wl|+>/`\"4-}_%"), aprs.Lenient)
-device, _ := packet.Device() // Yaesu FTM-400DR
+device, _ := packet.Device()
+fmt.Println(device) // Yaesu FTM-400DR
 
 report := packet.Data.(aprs.MicEReport)
 again, _ := aprs.NewPacket(packet.Source, packet.Destination, packet.Path, report) // the same bytes and destination

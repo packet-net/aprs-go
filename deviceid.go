@@ -19,6 +19,18 @@ type Device struct {
 	Features []string
 }
 
+// String is the vendor and model with a space between, as the Python library prints it
+// ("Open Source APRSdroid"); a part the database leaves out is dropped.
+func (d Device) String() string {
+	switch {
+	case d.Vendor == "":
+		return d.Model
+	case d.Model == "":
+		return d.Vendor
+	}
+	return d.Vendor + " " + d.Model
+}
+
 // clone gives a copy whose Features a caller may change without changing the database.
 func (d Device) clone() Device {
 	d.Features = append([]string(nil), d.Features...)
