@@ -692,3 +692,13 @@ func TestStormFieldMissingIsRefused(t *testing.T) {
 		Storm: &aprs.Storm{Kind: aprs.Hurricane}}})
 	eq(t, refusal(t, err), aprs.RefusalMissingField)
 }
+
+func TestMicELocatorThenTelemetryThenASpacedCommentHasItsSpace(t *testing.T) {
+	p, err := aprs.DecodeTNC2([]byte("N0CALL>S32UVT:`(_fn\"Oj/`IO91/G|!:&0'p| DG2MM"), aprs.Strict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := p.Data.(aprs.MicEReport)
+	eq(t, *m.Locator, "IO91")
+	eq(t, m.Fields.Comment, "DG2MM")
+}

@@ -280,9 +280,13 @@ func micEStatus(ctx *context, report *MicEReport, b []byte, offset int) bool {
 		// Base-91 telemetry and a !DAO! are lifted out before the locator is read, so a locator
 		// followed straight by them alone has nothing after it (vectors interpretations.md,
 		// "Where a Mic-E locator is read").
-		if len(s) > 0 && len(withoutTelemetryAndDAO(s)) > 0 {
-			if s[0] == ' ' {
-				s = drain(s, 0, 1)
+		if lifted := withoutTelemetryAndDAO(s); len(lifted) > 0 {
+			if lifted[0] == ' ' {
+				// Its space is the locator's even with telemetry before it in the bytes; one at the
+				// very start is dropped here, the other is the comment's own delimiter.
+				if s[0] == ' ' {
+					s = drain(s, 0, 1)
+				}
 			} else if !ctx.tolerate(CodeMissingSpaceAfterLocator, "text straight after the grid locator; a space comes first (APRS12c ch. 10)", offset) {
 				return false
 			}
