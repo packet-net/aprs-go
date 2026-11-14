@@ -431,6 +431,7 @@ func newPacket(source, destination Address, path []PathEntry, data Data) (*Packe
 			d, info, err := encodeMicE(&m)
 			if pend.run(err) {
 				destination, information = d, info
+				pend.size(len(info))
 			}
 		}
 	} else {

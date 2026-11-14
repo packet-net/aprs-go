@@ -247,7 +247,7 @@ func (c *common) positioned(what string, micE bool) (Positioned, error) {
 		return Positioned{}, newEncodeError(RefusalMissingField, what+" needs a position: call At(latitude, longitude)")
 	}
 	if c.symbol == nil {
-		return Positioned{}, newEncodeError(RefusalMissingField, what+" needs a symbol: call Symbol(...), such as Symbol(aprs.SymbolCar)")
+		return Positioned{}, newEncodeError(RefusalInvalidSymbol, what+" needs a symbol: call Symbol(...), such as Symbol(aprs.SymbolCar)")
 	}
 	position := *c.position
 	fields := c.fields
@@ -273,6 +273,21 @@ func (c *common) positioned(what string, micE bool) (Positioned, error) {
 			fields.AltitudeFeet = Ptr(roundSteps(metres) * metresToFeet)
 		} else {
 			fields.AltitudeFeet = Ptr(metres * metresToFeet)
+		}
+	}
+	if micE && fields.AltitudeFeet != nil {
+		// A Mic-E altitude goes in the Mic-E altitude bytes, rounded once to the nearest metre
+		// from the value given, whatever its unit: 1000 feet is 305 metres. One outside what
+		// those bytes hold is refused, not moved to a /A= (vectors README, Builder rules).
+		feet := *fields.AltitudeFeet
+		if c.altitudeM == nil {
+			metres := roundSteps(feet / metresToFeet)
+			if !inRange(metres, -10000, 743570) {
+				return Positioned{}, newEncodeError(refusalForValue(feet), "a Mic-E altitude is -10000 to 743570 metres")
+			}
+			fields.AltitudeFeet = Ptr(metres * metresToFeet)
+		} else if m := roundSteps(*c.altitudeM); !inRange(m, -10000, 743570) {
+			return Positioned{}, newEncodeError(refusalForValue(*c.altitudeM), "a Mic-E altitude is -10000 to 743570 metres")
 		}
 	}
 	// A course that rounds to 0 is the spec's unknown course, which Mic-E sends as 0 (APRS12c ch. 10).
@@ -455,15 +470,13 @@ func (b MicEBuilder) Data() (Data, error) {
 	return MicEReport{
 		MicEMessage: b.micEMessage,
 		TypeCode:    &typeCode,
-		// An altitude given in feet goes in a /A=, one in metres in the Mic-E altitude bytes.
-		AltitudeInComment: b.common.altitudeM == nil && b.common.fields.AltitudeFeet != nil,
-		Fields:            fields,
+		Fields:      fields,
 	}, nil
 }
 
 // Build gives the packet: the station's source and path, the destination this report computes,
-// and the report. An altitude given in feet goes in a /A=, one in metres in the Mic-E altitude
-// bytes.
+// and the report. An altitude, in either unit, goes in the Mic-E altitude bytes, rounded to the
+// nearest metre.
 func (b MicEBuilder) Build() (*Packet, error) { return build(b.station, b.Data) }
 
 // WeatherBuilder builds a weather report, from Station.Weather (APRS12c ch. 12). With a position

@@ -110,8 +110,8 @@ func encodeTelemetry(t *Telemetry) ([]byte, *EncodeError) {
 	if t.Sequence == "MIC" && len(t.Analog) > 0 && t.Analog[0] == nil {
 		p.note(newEncodeError(RefusalValueHasNoForm, "T#MIC with an empty first channel does not read back as given, so it cannot be sent"))
 	}
-	if hasLineBreak([]byte(t.Comment)) {
-		p.note(newEncodeError(RefusalInvalidCharacter, "telemetry comment text cannot contain a line break"))
+	if hasControl(t.Comment) {
+		p.note(newEncodeError(RefusalInvalidCharacter, "telemetry comment text cannot contain a control character"))
 	}
 	out := []byte("T#")
 	out = append(out, t.Sequence...)
@@ -135,6 +135,7 @@ func encodeTelemetry(t *Telemetry) ([]byte, *EncodeError) {
 		out = append(out, *t.Bits...)
 	}
 	out = append(out, t.Comment...)
+	p.size(len(out))
 	if err := p.finish(); err != nil {
 		return nil, err
 	}

@@ -6,8 +6,23 @@ import (
 )
 
 // decodeText reads text: valid UTF-8 as UTF-8; any invalid byte means the whole text is read as
-// Latin-1, a tolerated defect (CodeNonUTF8Text). False when that defect is not tolerated.
+// Latin-1, a tolerated defect (CodeNonUTF8Text). Then a byte below 0x20 or 0x7F anywhere in the
+// text is one more tolerated defect (CodeControlCharacterInText), judged last, after the text's
+// encoding. False when a defect is not tolerated.
 func decodeText(ctx *context, b []byte, offset int) (string, bool) {
+	s, ok := decodeTextUnjudged(ctx, b, offset)
+	if !ok {
+		return "", false
+	}
+	if !checkControlCharacters(ctx, b, offset) {
+		return "", false
+	}
+	return s, true
+}
+
+// decodeTextUnjudged is decodeText without the control-character judgement, for text whose
+// control characters are judged some other way, or not at all.
+func decodeTextUnjudged(ctx *context, b []byte, offset int) (string, bool) {
 	if utf8.Valid(b) {
 		return string(b), true
 	}
@@ -15,6 +30,27 @@ func decodeText(ctx *context, b []byte, offset int) (string, bool) {
 		return "", false
 	}
 	return latin1(b), true
+}
+
+// checkControlCharacters gives one tolerated defect for text with a byte below 0x20 or the byte
+// 0x7F in it, wherever and however many. False when the defect is not tolerated.
+func checkControlCharacters(ctx *context, b []byte, offset int) bool {
+	for i, c := range b {
+		if c < 0x20 || c == 0x7F {
+			return ctx.tolerate(CodeControlCharacterInText, "text with a control character in it (a byte below 0x20 or 0x7F); APRS12c gives text as printable characters", offset+i)
+		}
+	}
+	return true
+}
+
+// hasControl says whether text has a byte below 0x20 or the byte 0x7F, which an encoder refuses.
+func hasControl(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] == 0x7F {
+			return true
+		}
+	}
+	return false
 }
 
 // latin1 reads every byte as the code point of the same value.

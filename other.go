@@ -437,7 +437,7 @@ func footprintText(value float64, text string, limit float64, what string) (stri
 
 // decodeCapabilities reads TOKEN,TOKEN=VALUE,...
 func decodeCapabilities(ctx *context, info []byte) Data {
-	body, ok := decodeText(ctx, info[1:], 1)
+	body, ok := decodeTextUnjudged(ctx, info[1:], 1)
 	if !ok {
 		return nil
 	}
@@ -471,6 +471,15 @@ func decodeCapabilities(ctx *context, info []byte) Data {
 	if freeText && !ctx.tolerate(CodeFreeTextCapabilities, "a capabilities packet holds free text rather than TOKEN / TOKEN=VALUE items (APRS12c ch. 15)", 1) {
 		return nil
 	}
+	// A value is text: a control character in one is also a defect of its own, judged last.
+	for _, c := range items {
+		if c.Value != nil && hasControl(*c.Value) {
+			if !ctx.tolerate(CodeControlCharacterInText, "a capability value with a control character in it (a byte below 0x20 or 0x7F); APRS12c gives text as printable characters", 1) {
+				return nil
+			}
+			break
+		}
+	}
 	return Capabilities{Capabilities: items}
 }
 
@@ -502,7 +511,7 @@ func decodeUserDefined(ctx *context, info []byte) Data {
 }
 
 func decodeTestData(ctx *context, info []byte) Data {
-	text, ok := decodeText(ctx, info[1:], 1)
+	text, ok := decodeTextUnjudged(ctx, info[1:], 1)
 	if !ok {
 		return nil
 	}
@@ -521,8 +530,8 @@ func decodeAgrelo(ctx *context, info []byte) Data {
 
 func encodeOther(data Data) ([]byte, *EncodeError) {
 	printable := func(t, what string) *EncodeError {
-		if hasLineBreak([]byte(t)) {
-			return newEncodeError(RefusalInvalidCharacter, what+" cannot contain a line break")
+		if hasControl(t) {
+			return newEncodeError(RefusalInvalidCharacter, what+" cannot contain a control character")
 		}
 		return nil
 	}
@@ -560,6 +569,7 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 		out, err = weatherField(out, 's', d.Weather.WindSpeedMph, 3, false)
 		p.run(err)
 		out = writeWeatherFields(out, &d.Weather, p)
+		p.size(len(out))
 		if err := p.finish(); err != nil {
 			return nil, err
 		}
@@ -591,6 +601,7 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 			p.note(newEncodeError(RefusalMalformed, "a grid locator is 4 or 6 upper-case characters, e.g. IO91 or IO91SX"))
 		}
 		p.run(printable(d.Comment, "a beacon comment"))
+		p.size(1 + len(d.Locator) + 1 + len(d.Comment))
 		if err := p.finish(); err != nil {
 			return nil, err
 		}
@@ -623,6 +634,7 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 			p.run(err)
 			out = append(out, fmt.Sprintf("%s,%s,%04d", latitude, longitude, toU32(radius))...)
 		}
+		p.size(len(out))
 		if err := p.finish(); err != nil {
 			return nil, err
 		}
@@ -647,6 +659,17 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 				}
 			}
 		}
+		size := 1
+		for i, c := range d.Capabilities {
+			if i > 0 {
+				size++
+			}
+			size += len(c.Token)
+			if c.Value != nil {
+				size += 1 + len(*c.Value)
+			}
+		}
+		p.size(size)
 		if err := p.finish(); err != nil {
 			return nil, err
 		}
@@ -717,8 +740,9 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 			return nil, newEncodeError(RefusalInvalidCharacter, "user-defined data cannot end with a line break, which would not read back")
 		}
 	case TestData:
-		if err := printable(d.Data, "test data"); err != nil {
-			return nil, err
+		// Test data is data, not text: only a line break would not read back.
+		if hasLineBreak([]byte(d.Data)) {
+			return nil, newEncodeError(RefusalInvalidCharacter, "test data cannot contain a line break")
 		}
 		out = append(out, ',')
 		out = append(out, d.Data...)
@@ -747,8 +771,8 @@ func encodeNMEA(n *NMEA) ([]byte, *EncodeError) {
 			p.note(newEncodeError(RefusalNotANumber, "an NMEA field is not a number"))
 		}
 	}
-	if hasLineBreak([]byte(n.Comment)) {
-		p.note(newEncodeError(RefusalInvalidCharacter, "an NMEA comment cannot contain a line break"))
+	if hasControl(n.Comment) {
+		p.note(newEncodeError(RefusalInvalidCharacter, "an NMEA comment cannot contain a control character"))
 	}
 	// $ULTW is raw weather, not NMEA, so such a sentence would not read back.
 	structure, ok := nmeaSentenceOf(sentence)
@@ -786,6 +810,7 @@ func encodeNMEA(n *NMEA) ([]byte, *EncodeError) {
 			p.note(newEncodeError(RefusalInvalidNMEA, "a field given does not match what the NMEA sentence says"))
 		}
 	}
+	p.size(1 + len(sentence) + len(n.Comment))
 	if err := p.finish(); err != nil {
 		return nil, err
 	}

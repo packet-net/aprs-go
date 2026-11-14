@@ -107,44 +107,56 @@ func TestMicEIsMadeByNewPacketAndNeverLosesItsDestination(t *testing.T) {
 	eq(t, refusal(t, err), aprs.RefusalNotEncodable)
 }
 
-func TestAMicEAltitudeInTheCommentReEncodesWhereItWas(t *testing.T) {
-	built := func(altitude func(aprs.MicEBuilder) aprs.MicEBuilder) *aprs.Packet {
-		p, err := altitude(me(t).MicE(42.179, -71.1985).Symbol(aprs.SymbolCar)).Build()
-		if err != nil {
-			t.Fatal(err)
-		}
-		return p
+func TestAMicEAltitudeGoesInTheBytesAndADecodedSlashAGoesBack(t *testing.T) {
+	built := func(altitude func(aprs.MicEBuilder) aprs.MicEBuilder) (*aprs.Packet, error) {
+		return altitude(me(t).MicE(42.179, -71.1985).Symbol(aprs.SymbolCar)).Build()
 	}
-	// The Mic-E bytes: 9176 metres. The /A= : 100 feet, which no whole metre says.
-	for _, c := range []struct {
-		packet    *aprs.Packet
-		inComment bool
-	}{
-		{built(func(b aprs.MicEBuilder) aprs.MicEBuilder { return b.AltitudeM(9176) }), false},
-		{built(func(b aprs.MicEBuilder) aprs.MicEBuilder { return b.AltitudeFeet(100) }), true},
+	// A builder puts an altitude in the Mic-E altitude bytes whatever unit it was given in,
+	// rounded once to the nearest metre: 1000 feet is 305 metres.
+	for _, altitude := range []func(aprs.MicEBuilder) aprs.MicEBuilder{
+		func(b aprs.MicEBuilder) aprs.MicEBuilder { return b.AltitudeM(9176) },
+		func(b aprs.MicEBuilder) aprs.MicEBuilder { return b.AltitudeFeet(100) },
+		func(b aprs.MicEBuilder) aprs.MicEBuilder { return b.AltitudeFeet(1000) },
+		func(b aprs.MicEBuilder) aprs.MicEBuilder { return b.AltitudeFeet(30 / 0.3048) },
 	} {
-		heard, err := aprs.DecodeTNC2(c.packet.TNC2(), aprs.Lenient)
+		p, err := built(altitude)
 		if err != nil {
 			t.Fatal(err)
 		}
-		report := heard.Data.(aprs.MicEReport)
-		eq(t, report.AltitudeInComment, c.inComment)
-		again, err := aprs.NewPacket(heard.Source, heard.Destination, heard.Path, heard.Data)
+		if strings.Contains(string(p.Information), "/A=") {
+			t.Error(string(p.Information))
+		}
+		heard, err := aprs.DecodeTNC2(p.TNC2(), aprs.Lenient)
 		if err != nil {
 			t.Fatal(err)
 		}
-		eq(t, string(again.Information), string(c.packet.Information))
-		eq(t, again.Destination, c.packet.Destination)
+		eq(t, heard.Data.(aprs.MicEReport).AltitudeInComment, false)
 	}
-	// Feet that are exactly whole metres still go where the data says.
-	inText := built(func(b aprs.MicEBuilder) aprs.MicEBuilder { return b.AltitudeFeet(30 / 0.3048) })
-	if !strings.Contains(string(inText.Information), "/A=") {
-		t.Error(string(inText.Information))
+	p, err := built(func(b aprs.MicEBuilder) aprs.MicEBuilder { return b.AltitudeFeet(1000) })
+	if err != nil {
+		t.Fatal(err)
 	}
-	inBytes := built(func(b aprs.MicEBuilder) aprs.MicEBuilder { return b.AltitudeM(30) })
-	if strings.Contains(string(inBytes.Information), "/A=") {
-		t.Error(string(inBytes.Information))
+	heard, err := aprs.DecodeTNC2(p.TNC2(), aprs.Lenient)
+	if err != nil {
+		t.Fatal(err)
 	}
+	eq(t, math.Round(*heard.Data.(aprs.MicEReport).Fields.AltitudeFeet*1000), math.Round(305/0.3048*1000))
+	// An altitude outside what the bytes hold is refused, not moved to a /A=.
+	for _, feet := range []float64{-50000, 3000000} {
+		_, err := built(func(b aprs.MicEBuilder) aprs.MicEBuilder { return b.AltitudeFeet(feet) })
+		eq(t, refusal(t, err), aprs.RefusalValueOutOfRange)
+	}
+	// An altitude read from a /A= re-encodes as one, whatever its value.
+	heard, err = aprs.DecodeTNC2([]byte("N1JCM-9>TRQP7T:`c'wl|+>/`/A=001250"), aprs.Lenient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, heard.Data.(aprs.MicEReport).AltitudeInComment, true)
+	again, err := aprs.NewPacket(heard.Source, heard.Destination, heard.Path, heard.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, string(again.Information), string(heard.Information))
 }
 
 func TestNumbersTheEncoderRoundsAreFractionalAndRoundedOnce(t *testing.T) {
@@ -330,7 +342,7 @@ func TestBuilderRefusals(t *testing.T) {
 	_, err = station.Object("TESTOBJ").At(1, 1).Symbol(aprs.SymbolCar).Build()
 	eq(t, refusal(t, err), aprs.RefusalMissingField)
 	_, err = station.Position(1, 1).Build()
-	eq(t, refusal(t, err), aprs.RefusalMissingField)
+	eq(t, refusal(t, err), aprs.RefusalInvalidSymbol)
 	_, err = station.Weather().At(1, 1).TemperatureF(50).HumidityPercent(0).Build()
 	eq(t, refusal(t, err), aprs.RefusalValueHasNoForm)
 	_, err = station.Telemetry(1000).Build()
@@ -578,4 +590,75 @@ func TestNotANumberOutranksLaterCodes(t *testing.T) {
 	eq(t, err.(*aprs.EncodeError).Code(), aprs.RefusalNotANumber)
 	_, err = aprs.Encode(aprs.PositionReport{Fields: aprs.Positioned{Position: aprs.Position{Latitude: 90.0001, Longitude: math.NaN()}, Symbol: aprs.SymbolCar, Compressed: true}})
 	eq(t, err.(*aprs.EncodeError).Code(), aprs.RefusalNotANumber)
+}
+
+func TestRoundFourEncoderLimitsAndControlCharacters(t *testing.T) {
+	// 256 bytes is the most an information field holds, counted in bytes: the first byte is the
+	// data type identifier.
+	_, err := aprs.Encode(aprs.Status{Text: strings.Repeat("x", 255)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = aprs.Encode(aprs.Status{Text: strings.Repeat("x", 256)})
+	eq(t, refusal(t, err), aprs.RefusalTooLong)
+	_, err = aprs.Encode(aprs.Status{Text: strings.Repeat("\u00e9", 128)})
+	eq(t, refusal(t, err), aprs.RefusalTooLong)
+	// A decoded field over 256 bytes decodes, and re-encodes refused.
+	long := "N0CALL>APZ001:>" + strings.Repeat("x", 300)
+	heard, err := aprs.DecodeTNC2([]byte(long), aprs.Strict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = aprs.NewPacket(heard.Source, heard.Destination, heard.Path, heard.Data)
+	eq(t, refusal(t, err), aprs.RefusalTooLong)
+	// A control character in text is refused, TAB included, and read with a warning.
+	_, err = aprs.Encode(aprs.Status{Text: "a\tb"})
+	eq(t, refusal(t, err), aprs.RefusalInvalidCharacter)
+	heard, err = aprs.DecodeTNC2([]byte("N0CALL>APZ001:>a\tb"), aprs.Lenient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, heard.Diagnostics[len(heard.Diagnostics)-1].Code, aprs.CodeControlCharacterInText)
+	strict, _ := aprs.DecodeTNC2([]byte("N0CALL>APZ001:>a\tb"), aprs.Strict)
+	if _, ok := strict.Data.(aprs.Unrecognized); !ok {
+		t.Error("strict should reject a control character in text")
+	}
+}
+
+func TestRoundFourBuilderDefaults(t *testing.T) {
+	station := me(t)
+	_, err := station.Object("TESTOBJ").At(1, 1).Symbol(aprs.SymbolCar).Build()
+	eq(t, refusal(t, err), aprs.RefusalMissingField)
+	_, err = station.Weather().TemperatureF(50).Build()
+	eq(t, refusal(t, err), aprs.RefusalMissingField)
+	for _, build := range []func() (*aprs.Packet, error){
+		func() (*aprs.Packet, error) { return station.Position(1, 1).Build() },
+		func() (*aprs.Packet, error) {
+			return station.Object("TESTOBJ").At(1, 1).Timestamp(aprs.TimestampDHM(1, 2, 3)).Build()
+		},
+		func() (*aprs.Packet, error) { return station.Item("TESTITEM").At(1, 1).Build() },
+		func() (*aprs.Packet, error) { return station.MicE(1, 1).Build() },
+	} {
+		_, err := build()
+		eq(t, refusal(t, err), aprs.RefusalInvalidSymbol)
+	}
+	p, err := station.MicE(1, 1).Symbol(aprs.SymbolCar).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tc := p.Data.(aprs.MicEReport).TypeCode; tc == nil || *tc != '\'' {
+		t.Errorf("a Mic-E report that does not say it can message has type code %v", tc)
+	}
+}
+
+func TestARunOnWeatherValueIsDropped(t *testing.T) {
+	heard, err := aprs.DecodeTNC2([]byte("N0CALL>APZ001:_10090556c220s004g005t2147483647r000p000"), aprs.Lenient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := heard.Data.(aprs.WeatherReport).Weather
+	if w.TemperatureF != nil || w.Rain1hIn == nil || w.Rain24hIn == nil {
+		t.Errorf("%+v", w)
+	}
+	eq(t, heard.Diagnostics[len(heard.Diagnostics)-1].Code, aprs.CodeOutOfRangeValue)
 }
