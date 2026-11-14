@@ -132,7 +132,6 @@ func encodeStatus(s *Status) ([]byte, *EncodeError) {
 		}
 		out = append(out, '^', h, pw)
 	}
-	p.size(len(out))
 	if err := p.finish(); err != nil {
 		return nil, err
 	}

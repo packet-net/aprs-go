@@ -641,14 +641,15 @@ func encodeMicE(r *MicEReport) (Address, []byte, *EncodeError) {
 				out = base91Encode(out, toU32(datum), 3)
 				out = append(out, '}')
 				// With no type code before it (legacy telemetry is taken off first), a first
-				// byte that is one reads back as the type code, and beyond six digits no /A= can
-				// say the altitude instead.
+				// byte that is one reads back as the type code. A value a /A= holds exactly went
+				// to the text above; one it does not (not a whole number of feet, or beyond six
+				// digits) has no form.
 				legacy := 0
 				if len(r.LegacyTelemetry) > 0 {
 					legacy = 6
 				}
-				if r.TypeCode == nil && at == statusStart+legacy && isTypeCode(out[at]) && !inRange(roundSteps(feet), -99999, 999999) {
-					pend.note(newEncodeError(RefusalValueHasNoForm, "this Mic-E altitude has no form: its first byte would read as a type code and no /A= holds it"))
+				if r.TypeCode == nil && at == statusStart+legacy && isTypeCode(out[at]) {
+					pend.note(newEncodeError(RefusalValueHasNoForm, "this Mic-E altitude has no form: its first byte would read as a type code and no /A= holds it exactly"))
 				}
 			}
 		}
@@ -776,14 +777,6 @@ func encodeMicE(r *MicEReport) (Address, []byte, *EncodeError) {
 			}
 		}
 	}
-	size := len(out) + len(trailer) + len(suffix)
-	if f.Weather == nil {
-		size += len(text)
-		if f.Frequency != nil && len(text) > 0 {
-			size++
-		}
-	}
-	pend.size(size)
 	if err := pend.finish(); err != nil {
 		return Address{}, nil, err
 	}

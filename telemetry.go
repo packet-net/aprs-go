@@ -88,11 +88,15 @@ func decodeTelemetry(ctx *context, info []byte) Data {
 func encodeTelemetry(t *Telemetry) ([]byte, *EncodeError) {
 	p := &pending{}
 	// The sequence is fixed-form text: letters and digits, or MIC.
-	seqOK := t.Sequence != ""
+	// A sequence left out (the empty string, as for any absent text) is missing-field.
+	seqOK := true
 	for i := 0; i < len(t.Sequence); i++ {
 		seqOK = seqOK && isAlnum(t.Sequence[i])
 	}
-	if !seqOK {
+	switch {
+	case t.Sequence == "":
+		p.note(newEncodeError(RefusalMissingField, "a telemetry report needs a sequence (APRS12c ch. 13)"))
+	case !seqOK:
 		p.note(newEncodeError(RefusalMalformed, "a telemetry sequence is letters and digits"))
 	}
 	if len(t.Analog) > 5 {
@@ -135,7 +139,6 @@ func encodeTelemetry(t *Telemetry) ([]byte, *EncodeError) {
 		out = append(out, *t.Bits...)
 	}
 	out = append(out, t.Comment...)
-	p.size(len(out))
 	if err := p.finish(); err != nil {
 		return nil, err
 	}

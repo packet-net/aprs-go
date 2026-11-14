@@ -24,7 +24,7 @@ func Encode(data Data) ([]byte, error) {
 func encode(data Data) ([]byte, *EncodeError) {
 	out, err := encodeData(data)
 	if err == nil && len(out) > maxInformationField {
-		return nil, newEncodeError(RefusalTooLong, fmt.Sprintf("an information field is at most 256 bytes (APRS12c ch. 3), and this one would be %d", len(out)))
+		return nil, newEncodeError(RefusalTooLong, fmt.Sprintf("an information field is at most 256 bytes (APRS12c ch. 3), and this one is %d", len(out)))
 	}
 	return out, err
 }
@@ -302,16 +302,7 @@ func encodePositioned(out []byte, f *Positioned, p *pending) ([]byte, *EncodeErr
 		}
 		trailer = append(trailer, '!')
 	}
-	// What is wrong on its own, or between fields, is named before the read-back is tried. A
-	// weather report has no place for a comment, so its text makes no bytes.
-	size := len(out) + len(trailer)
-	if f.Weather == nil {
-		size += len(text)
-		if f.Frequency != nil && len(text) > 0 {
-			size++
-		}
-	}
-	p.size(size)
+	// What is wrong on its own, or between fields, is named before the read-back is tried.
 	if err := p.finish(); err != nil {
 		return nil, err
 	}

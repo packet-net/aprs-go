@@ -567,7 +567,6 @@ func encodeMessage(data Data) ([]byte, *EncodeError) {
 	default:
 		return nil, newEncodeError(RefusalNotEncodable, "not a message")
 	}
-	p.size(len(out))
 	if err := p.finish(); err != nil {
 		return nil, err
 	}

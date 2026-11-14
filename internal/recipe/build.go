@@ -1,4 +1,4 @@
-package main
+package recipe
 
 import (
 	"fmt"
@@ -542,8 +542,7 @@ func build(input map[string]any) (*aprs.Packet, error) {
 			return nil, err
 		}
 		// The builder takes the sequence as an argument, so a recipe without one is built with
-		// 0 to see what else is wrong, and refused as missing-field after any code ranked
-		// before it.
+		// 0 for the station's sake, and its data with no sequence goes to the encoder.
 		var seq uint16
 		if sequence != nil {
 			seq = uint16(*sequence)
@@ -591,7 +590,20 @@ func build(input map[string]any) (*aprs.Packet, error) {
 		}
 		p, err := b.Build()
 		if missingSequence {
-			if e, ok := err.(*aprs.EncodeError); ok && refusalRank(e.Code().ID()) < refusalRank("missing-field") {
+			// The builder takes the sequence as an argument, so the recipe was built with 0 to see
+			// what else is wrong with the station. The data itself, with no sequence, goes to the
+			// encoder, which refuses missing-field at its place in the order (and the size, last,
+			// is never measured on a record that is refused).
+			if _, bad := err.(*aprs.InvalidAddressError); bad {
+				return nil, err
+			}
+			data, err := b.Data()
+			if err != nil {
+				return nil, err
+			}
+			t := data.(aprs.Telemetry)
+			t.Sequence = ""
+			if _, err := aprs.Encode(t); err != nil {
 				return nil, err
 			}
 			return nil, &missingField{reason: "a telemetry report has a sequence number (APRS12c ch. 13)"}

@@ -103,7 +103,7 @@ info, err := aprs.Encode(aprs.Message{Addressee: "G3NRW", Text: "Hi Ian", Messag
 // :G3NRW    :Hi Ian{01}
 ```
 
-An information field is at most 256 bytes (APRS12c ch. 3): an encoder or builder refuses data that would make a longer one, whatever the output (TNC2, AX.25 or KISS), as `too-long`; text counts as its UTF-8 bytes, and a third-party packet's limit is on the outer field. Text with a control character in it (a byte below 0x20, TAB, CR and LF inside the text included, or 0x7F) is refused as `invalid-character`. A decoder sets no limit on the field, and gives one `control-character-in-text` warning for text that holds a control character, so `aprs.Strict` rejects it.
+An information field is at most 256 bytes (APRS12c ch. 3): an encoder or builder refuses data that would make a longer one, whatever the output (TNC2, AX.25 or KISS), as `too-long`, judged last on the bytes actually written, so data any other rule refuses gets that rule's code; text counts as its UTF-8 bytes, and a third-party packet's limit is on the outer field. Text with a control character in it (a byte below 0x20, TAB, CR and LF inside the text included, or 0x7F) is refused as `invalid-character`. A decoder sets no limit on the field, and gives one `control-character-in-text` warning for text that holds a control character, so `aprs.Strict` rejects it.
 
 What the spec does not allow is refused with an `*EncodeError`. Its `Code()` says why, from the same 26 reasons the other implementations use (the `refusals` list in the vectors' `codes.json`); the message is for people and may change.
 

@@ -184,17 +184,10 @@ func (p *pending) run(e *EncodeError) bool {
 	return true
 }
 
-// maxInformationField is the most bytes an information field holds (APRS12c ch. 3).
+// maxInformationField is the most bytes an information field holds (APRS12c ch. 3). It is the
+// last check, made on the bytes actually written, after every other one (the read-back included),
+// so a record any other rule refuses gets that rule's code.
 const maxInformationField = 256
-
-// size notes a field over 256 bytes: n is the bytes the data's fields make as given, before
-// anything else is looked at, so a later fault in the order of refusals does not hide it. A
-// field the report has no place for, or one left out, makes none.
-func (p *pending) size(n int) {
-	if n > maxInformationField {
-		p.note(newEncodeError(RefusalTooLong, fmt.Sprintf("an information field is at most 256 bytes (APRS12c ch. 3), and this one would be %d", n)))
-	}
-}
 
 func (p *pending) finish() *EncodeError {
 	return p.err

@@ -1,4 +1,4 @@
-package main
+package recipe
 
 import (
 	"math"
@@ -15,21 +15,21 @@ func TestTwoUnitRecipeIsRanked(t *testing.T) {
 		}
 		return map[string]any{"n": int64(1), "station": map[string]any{"source": "N0CALL"}, "report": "position", "args": args}
 	}
-	if r := buildRecord(recipe(nil)); r["refusal"] != "value-given-twice" {
+	if r := Build(recipe(nil)); r.Refusal != "value-given-twice" {
 		t.Errorf("two clean units: %v", r)
 	}
-	if r := buildRecord(recipe(map[string]any{"speed_kmh": 1851259.2})); r["refusal"] != "value-out-of-range" {
+	if r := Build(recipe(map[string]any{"speed_kmh": 1851259.2})); r.Refusal != "value-out-of-range" {
 		t.Errorf("one unit out of range: %v", r)
 	}
-	if r := buildRecord(recipe(map[string]any{"altitude_feet": 1.0, "altitude_m": 1.0e9})); r["result"] != "refused" || r["refusal"] != "value-out-of-range" {
+	if r := Build(recipe(map[string]any{"altitude_feet": 1.0, "altitude_m": 1.0e9})); r.Refusal != "value-out-of-range" {
 		t.Errorf("a second pair: %v", r)
 	}
 }
 
 func TestNonFiniteAmbiguityRanksAsNotANumber(t *testing.T) {
 	args := map[string]any{"latitude": 49.5, "longitude": -72.5, "symbol": "/>", "ambiguity": math.NaN(), "altitude_feet": 1.0, "altitude_m": 1.0}
-	r := buildRecord(map[string]any{"n": int64(1), "station": map[string]any{"source": "N0CALL"}, "report": "position", "args": args})
-	if r["refusal"] != "not-a-number" {
+	r := Build(map[string]any{"n": int64(1), "station": map[string]any{"source": "N0CALL"}, "report": "position", "args": args})
+	if r.Refusal != "not-a-number" {
 		t.Errorf("%v", r)
 	}
 }

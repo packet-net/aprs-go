@@ -431,7 +431,9 @@ func newPacket(source, destination Address, path []PathEntry, data Data) (*Packe
 			d, info, err := encodeMicE(&m)
 			if pend.run(err) {
 				destination, information = d, info
-				pend.size(len(info))
+				if len(info) > maxInformationField {
+					pend.note(newEncodeError(RefusalTooLong, fmt.Sprintf("an information field is at most 256 bytes (APRS12c ch. 3), and this one is %d", len(info))))
+				}
 			}
 		}
 	} else {

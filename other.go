@@ -544,10 +544,13 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 	case WeatherReport:
 		p := &pending{}
 		var t *Timestamp
-		if d.Timestamp != nil && d.Timestamp.Kind == MonthDayHourMinute {
+		switch {
+		case d.Timestamp == nil:
+			p.note(newEncodeError(RefusalMissingField, "a positionless weather report needs a timestamp (APRS12c ch. 12)"))
+		case d.Timestamp.Kind == MonthDayHourMinute:
 			p.run(checkTimestamp(*d.Timestamp))
 			t = d.Timestamp
-		} else {
+		default:
 			p.note(newEncodeError(RefusalInvalidTimestamp, "a positionless weather report has an MDHM timestamp (APRS12c ch. 12)"))
 		}
 		if d.Comment != "" {
@@ -569,7 +572,6 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 		out, err = weatherField(out, 's', d.Weather.WindSpeedMph, 3, false)
 		p.run(err)
 		out = writeWeatherFields(out, &d.Weather, p)
-		p.size(len(out))
 		if err := p.finish(); err != nil {
 			return nil, err
 		}
@@ -601,7 +603,6 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 			p.note(newEncodeError(RefusalMalformed, "a grid locator is 4 or 6 upper-case characters, e.g. IO91 or IO91SX"))
 		}
 		p.run(printable(d.Comment, "a beacon comment"))
-		p.size(1 + len(d.Locator) + 1 + len(d.Comment))
 		if err := p.finish(); err != nil {
 			return nil, err
 		}
@@ -634,7 +635,6 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 			p.run(err)
 			out = append(out, fmt.Sprintf("%s,%s,%04d", latitude, longitude, toU32(radius))...)
 		}
-		p.size(len(out))
 		if err := p.finish(); err != nil {
 			return nil, err
 		}
@@ -659,17 +659,6 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 				}
 			}
 		}
-		size := 1
-		for i, c := range d.Capabilities {
-			if i > 0 {
-				size++
-			}
-			size += len(c.Token)
-			if c.Value != nil {
-				size += 1 + len(*c.Value)
-			}
-		}
-		p.size(size)
 		if err := p.finish(); err != nil {
 			return nil, err
 		}
@@ -810,7 +799,6 @@ func encodeNMEA(n *NMEA) ([]byte, *EncodeError) {
 			p.note(newEncodeError(RefusalInvalidNMEA, "a field given does not match what the NMEA sentence says"))
 		}
 	}
-	p.size(1 + len(sentence) + len(n.Comment))
 	if err := p.finish(); err != nil {
 		return nil, err
 	}

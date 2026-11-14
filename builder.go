@@ -246,9 +246,8 @@ func (c *common) positioned(what string, micE bool) (Positioned, error) {
 	if c.position == nil {
 		return Positioned{}, newEncodeError(RefusalMissingField, what+" needs a position: call At(latitude, longitude)")
 	}
-	if c.symbol == nil {
-		return Positioned{}, newEncodeError(RefusalInvalidSymbol, what+" needs a symbol: call Symbol(...), such as Symbol(aprs.SymbolCar)")
-	}
+	// A symbol not given stays the zero Symbol, which the encoder refuses as invalid-symbol at its
+	// place in the order of refusals.
 	position := *c.position
 	fields := c.fields
 	// An ambiguous position reports the box that holds it: its digits cut, not rounded, then
@@ -265,7 +264,9 @@ func (c *common) positioned(what string, micE bool) (Positioned, error) {
 	} else {
 		fields.Position = Position{Latitude: position.Latitude, Longitude: position.Longitude, Ambiguity: c.ambiguity}
 	}
-	fields.Symbol = *c.symbol
+	if c.symbol != nil {
+		fields.Symbol = *c.symbol
+	}
 	if c.altitudeM != nil {
 		// Mic-E carries its altitude in whole metres (APRS12c ch. 10); a /A= is in feet.
 		metres := *c.altitudeM
@@ -278,16 +279,14 @@ func (c *common) positioned(what string, micE bool) (Positioned, error) {
 	if micE && fields.AltitudeFeet != nil {
 		// A Mic-E altitude goes in the Mic-E altitude bytes, rounded once to the nearest metre
 		// from the value given, whatever its unit: 1000 feet is 305 metres. One outside what
-		// those bytes hold is refused, not moved to a /A= (vectors README, Builder rules).
+		// those bytes hold is refused, not moved to a /A= (vectors README, Builder rules); that
+		// is MicEBuilder.Data's to name, at its place in the order of refusals, so it is kept as
+		// given here.
 		feet := *fields.AltitudeFeet
 		if c.altitudeM == nil {
-			metres := roundSteps(feet / metresToFeet)
-			if !inRange(metres, -10000, 743570) {
-				return Positioned{}, newEncodeError(refusalForValue(feet), "a Mic-E altitude is -10000 to 743570 metres")
+			if metres := roundSteps(feet / metresToFeet); inRange(metres, -10000, 743570) {
+				fields.AltitudeFeet = Ptr(metres * metresToFeet)
 			}
-			fields.AltitudeFeet = Ptr(metres * metresToFeet)
-		} else if m := roundSteps(*c.altitudeM); !inRange(m, -10000, 743570) {
-			return Positioned{}, newEncodeError(refusalForValue(*c.altitudeM), "a Mic-E altitude is -10000 to 743570 metres")
 		}
 	}
 	// A course that rounds to 0 is the spec's unknown course, which Mic-E sends as 0 (APRS12c ch. 10).
@@ -397,11 +396,13 @@ func (b ObjectBuilder) Data() (Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	if b.timestamp == nil {
-		return nil, newEncodeError(RefusalMissingField, "an object needs a timestamp: call Timestamp(...) or Permanent()")
+	// A timestamp not given is left nil, which the encoder refuses as missing-field at its place.
+	var t *Timestamp
+	if b.timestamp != nil {
+		c := *b.timestamp
+		t = &c
 	}
-	t := *b.timestamp
-	return ObjectReport{Name: b.name, Killed: b.killed, Timestamp: &t, Fields: fields}, nil
+	return ObjectReport{Name: b.name, Killed: b.killed, Timestamp: t, Fields: fields}, nil
 }
 
 // Build gives the packet: the station's header and this object, encoded.
@@ -461,6 +462,22 @@ func (b MicEBuilder) Data() (Data, error) {
 	fields, err := b.common.positioned("a Mic-E report", true)
 	if err != nil {
 		return nil, err
+	}
+	// An altitude outside the Mic-E altitude bytes' range is refused (not moved to a /A=). The
+	// refusal ranks with what else is wrong with the report, so the encoder is asked about the
+	// rest first.
+	if fields.AltitudeFeet != nil {
+		metres := roundSteps(*fields.AltitudeFeet / metresToFeet)
+		if !inRange(metres, -10000, 743570) {
+			fault := newEncodeError(refusalForValue(*fields.AltitudeFeet), "a Mic-E altitude is -10000 to 743570 metres")
+			rest := fields
+			rest.AltitudeFeet = nil
+			typeCode := '\''
+			if _, _, other := encodeMicE(&MicEReport{MicEMessage: b.micEMessage, TypeCode: &typeCode, Fields: rest}); other != nil && other.code.rank() < fault.code.rank() {
+				return nil, other
+			}
+			return nil, fault
+		}
 	}
 	// The type code says whether the station can message (APRS 1.2 Mic-E type codes).
 	typeCode := '\''
@@ -641,11 +658,13 @@ func (b WeatherBuilder) Data() (Data, error) {
 	if b.messaging || b.compressed || b.dao != nil || b.symbol != SymbolWeatherStation {
 		return nil, newEncodeError(RefusalMissingField, "a symbol, messaging, compression and DAO need a position: call At(latitude, longitude)")
 	}
-	if b.timestamp == nil {
-		return nil, newEncodeError(RefusalMissingField, "a positionless weather report needs a timestamp: call Timestamp(aprs.TimestampMDHM(...))")
+	// A timestamp not given is left nil, which the encoder refuses as missing-field at its place.
+	var t *Timestamp
+	if b.timestamp != nil {
+		c := *b.timestamp
+		t = &c
 	}
-	t := *b.timestamp
-	return WeatherReport{Timestamp: &t, Weather: weather}, nil
+	return WeatherReport{Timestamp: t, Weather: weather}, nil
 }
 
 // Build gives the packet: the station's header and this report, encoded.

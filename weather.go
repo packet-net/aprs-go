@@ -81,17 +81,21 @@ func weatherFields(ctx *context, b []byte, offset int, w *Weather, wind windMode
 		if width > 0 && !snow {
 			if n := runOnLength(b, at, width, letter); n > 0 {
 				end := at + 1 + n
-				if end == len(b) || startsReadableField(b, end, wind, seen, run, directionKnown, speedKnown) {
+				// The run's own field counts as read, so a following letter of the same field does
+				// not qualify (a following s after a wind speed is snowfall, another field).
+				after, afterRun := append(seen[:len(seen):len(seen)], key), run
+				afterDirection, afterSpeed := directionKnown, speedKnown
+				switch {
+				case letter == 'c':
+					afterDirection, afterRun.direction = true, true
+				case letter == 's':
+					afterSpeed, afterRun.speed = true, true
+				}
+				if end == len(b) || startsReadableField(b, end, wind, after, afterRun, afterDirection, afterSpeed) {
 					if !ctx.tolerate(CodeOutOfRangeValue, "a weather value that runs on by two or more digits was dropped", offset+at) {
 						return weatherRun{}, false
 					}
-					seen = append(seen, key)
-					switch {
-					case letter == 'c':
-						directionKnown, run.direction = true, true
-					case letter == 's':
-						speedKnown, run.speed = true, true
-					}
+					seen, run, directionKnown, speedKnown = after, afterRun, afterDirection, afterSpeed
 					at = end
 					continue
 				}
@@ -183,7 +187,8 @@ func runOnLength(b []byte, at, width int, letter byte) int {
 }
 
 // startsReadableField says whether a defined weather field, not already read and with a value,
-// starts at b[at], as the run of fields would read it there.
+// starts at b[at], as the run of fields would read it there. seen, run and the known flags are as
+// they are after the run, which counts as having read its own field.
 func startsReadableField(b []byte, at int, wind windMode, seen []byte, run weatherRun, directionKnown, speedKnown bool) bool {
 	letter := b[at]
 	if !isWeatherLetter(letter) || (letter == 'c' && directionKnown) {
