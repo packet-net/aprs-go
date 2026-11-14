@@ -83,7 +83,7 @@ func DecodeKISS(frame []byte, options ParseOptions) (*Packet, error) {
 }
 
 // KISS gives the packet as a KISS data frame for port (0-15), with FEND delimiters, for a KISS
-// TNC. It fails as AX25 does.
+// TNC. It fails as AX25 does, and writes the information field as it stands (no size check; see AX25).
 func (p *Packet) KISS(port uint8) ([]byte, error) {
 	frame, err := p.AX25()
 	if err != nil {

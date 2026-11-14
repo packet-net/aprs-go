@@ -25,13 +25,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"runtime"
 	"sync"
 
 	aprs "github.com/packet-net/aprs-go"
 	"github.com/packet-net/aprs-go/internal/neutral"
+	"github.com/packet-net/aprs-go/internal/recipe"
 )
 
 type mode int
@@ -371,10 +371,10 @@ func api(p *aprs.Packet) map[string]any {
 
 func encodeRecord(input map[string]any) map[string]any {
 	n := input["n"]
-	data, unreadable := neutral.ReadData(input["data"])
+	data, pending, unreadable := neutral.ReadDataStandIn(input["data"])
 	if unreadable != nil {
 		if unreadable.Refused {
-			return map[string]any{"n": n, "result": "refused", "reason": unreadable.Reason, "refusal": unreadable.Code.ID()}
+			return refusedRecord(n, unreadable.Reason, unreadable.Code, unreadable.Tool)
 		}
 		return map[string]any{"n": n, "result": "unsupported", "reason": unreadable.Reason}
 	}
@@ -390,9 +390,16 @@ func encodeRecord(input map[string]any) map[string]any {
 	} else {
 		info, err = aprs.Encode(data)
 	}
-	if err != nil {
-		e := err.(*aprs.EncodeError)
-		return map[string]any{"n": n, "result": "refused", "reason": e.Error(), "refusal": e.Code().ID()}
+	if err != nil || pending != nil {
+		var code *aprs.RefusalCode
+		reason := ""
+		if err != nil {
+			e := err.(*aprs.EncodeError)
+			c := e.Code()
+			code, reason = &c, e.Error()
+		}
+		settled, why, tool := neutral.Settle(pending, code, reason)
+		return refusedRecord(n, why, settled, tool)
 	}
 	// The bytes decoded leniently under N0CALL> and the destination.
 	p := aprs.Decode(source, destination, nil, info, aprs.Lenient)
@@ -400,123 +407,34 @@ func encodeRecord(input map[string]any) map[string]any {
 	return map[string]any{"n": n, "result": "written", "info": toHex(info), "destination": destination.String(), "again": again}
 }
 
+// refusedRecord is a refused dump record; "via" says "tool" when the dump tool's reader made the
+// refusal (an input this package cannot hold whose value alone decides the code), not the library.
+func refusedRecord(n any, reason string, code aprs.RefusalCode, tool bool) map[string]any {
+	r := map[string]any{"n": n, "result": "refused", "reason": reason, "refusal": code.ID()}
+	if tool {
+		r["via"] = "tool"
+	}
+	return r
+}
+
 // ------------------------------------------------------------------ build
 
-// unitPairs are the quantities a recipe may give in two units. A recipe is one input, so one that
-// gives both is value-given-twice, ranked after the checks on each value and the recipe's other
-// faults (the vectors README, Builder rules).
-var unitPairs = [][2]string{
-	{"speed_knots", "speed_kmh"}, {"altitude_feet", "altitude_m"}, {"temperature_f", "temperature_c"},
-	{"rain_1h_in", "rain_1h_mm"}, {"rain_24h_in", "rain_24h_mm"}, {"rain_midnight_in", "rain_midnight_mm"},
-}
-
-// refusalOrder is the README's Refusal reasons order.
-var refusalOrder = []string{
-	"not-encodable", "invalid-address", "ax25-cannot-carry", "tnc2-cannot-carry", "invalid-third-party-header",
-	"invalid-addressee", "invalid-name", "invalid-timestamp", "not-a-number", "value-out-of-range", "value-has-no-form",
-	"invalid-code", "invalid-symbol", "invalid-character", "too-long", "padding-space", "malformed", "invalid-message-id",
-	"invalid-nmea", "extension-conflict", "field-not-allowed", "symbol-mismatch", "missing-field", "value-given-twice",
-	"text-reads-as-field", "does-not-read-back",
-}
-
-func refusalRank(id string) int {
-	for i, c := range refusalOrder {
-		if c == id {
-			return i
-		}
-	}
-	return len(refusalOrder)
-}
-
-// twoUnitRecord builds a recipe that gives a quantity in two units once with each unit (every
-// value is checked on its own) and reports the first code in the order among those refusals and
-// value-given-twice. It never builds from one unit and never gives unsupported.
-func twoUnitRecord(input map[string]any, args map[string]any) (map[string]any, bool) {
-	var present [][2]string
-	for _, pair := range unitPairs {
-		if _, a := args[pair[0]]; a {
-			if _, b := args[pair[1]]; b {
-				present = append(present, pair)
-			}
-		}
-	}
-	if len(present) == 0 {
-		return nil, false
-	}
-	best, reason := "value-given-twice", "a quantity given in two units"
-	for side := 0; side < 2; side++ {
-		a := make(map[string]any, len(args))
-		for k, v := range args {
-			a[k] = v
-		}
-		for _, pair := range present {
-			delete(a, pair[1-side])
-		}
-		copied := make(map[string]any, len(input))
-		for k, v := range input {
-			copied[k] = v
-		}
-		copied["args"] = a
-		if _, err := build(copied); err != nil {
-			if e, ok := err.(*aprs.EncodeError); ok && refusalRank(e.Code().ID()) < refusalRank(best) {
-				best, reason = e.Code().ID(), e.Error()
-			} else if ia, ok := err.(*aprs.InvalidAddressError); ok && refusalRank("invalid-address") < refusalRank(best) {
-				best, reason = "invalid-address", ia.Error()
-			}
-		}
-	}
-	return map[string]any{"n": input["n"], "result": "refused", "reason": reason, "refusal": best}, true
-}
-
-// buildRecord builds a recipe. An ambiguity that is not a finite number is not-a-number at its
-// place in the order: it is left out of the build and ranked with whatever else the recipe refuses.
+// buildRecord builds a recipe with the shared builder mapping (internal/recipe), which the
+// vectors test runner uses too, and writes the dump record.
 func buildRecord(input map[string]any) map[string]any {
-	args, ok := input["args"].(map[string]any)
-	if !ok {
-		return buildRecordFinite(input)
-	}
-	v, ok := args["ambiguity"].(float64)
-	if !ok || (!math.IsNaN(v) && !math.IsInf(v, 0)) {
-		return buildRecordFinite(input)
-	}
-	rest := make(map[string]any, len(args))
-	for k, x := range args {
-		if k != "ambiguity" {
-			rest[k] = x
+	n := input["n"]
+	o := recipe.Build(input)
+	switch {
+	case o.Unsupported != "":
+		return map[string]any{"n": n, "result": "unsupported", "reason": o.Unsupported}
+	case o.Refusal != "":
+		r := map[string]any{"n": n, "result": "refused", "reason": o.Reason, "refusal": o.Refusal}
+		if o.Tool {
+			r["via"] = "tool"
 		}
-	}
-	copied := make(map[string]any, len(input))
-	for k, x := range input {
-		copied[k] = x
-	}
-	copied["args"] = rest
-	r := buildRecordFinite(copied)
-	if code, _ := r["refusal"].(string); r["result"] == "refused" && refusalRank(code) < refusalRank("not-a-number") {
 		return r
 	}
-	return map[string]any{"n": input["n"], "result": "refused", "reason": "ambiguity is not a number", "refusal": "not-a-number"}
-}
-
-func buildRecordFinite(input map[string]any) map[string]any {
-	n := input["n"]
-	if args, ok := input["args"].(map[string]any); ok {
-		if r, two := twoUnitRecord(input, args); two {
-			return r
-		}
-	}
-	p, err := build(input)
-	if err != nil {
-		switch e := err.(type) {
-		case *notSupported:
-			return map[string]any{"n": n, "result": "unsupported", "reason": e.reason}
-		case *aprs.EncodeError:
-			return map[string]any{"n": n, "result": "refused", "reason": e.Error(), "refusal": e.Code().ID()}
-		case *aprs.InvalidAddressError:
-			return map[string]any{"n": n, "result": "refused", "reason": e.Error(), "refusal": aprs.RefusalInvalidAddress.ID()}
-		}
-		panic(err)
-	}
-	line := p.TNC2()
+	line := o.Packet.TNC2()
 	decoded, _ := result(line, aprs.Lenient)
 	return map[string]any{"n": n, "result": "built", "tnc2": toHex(line), "again": decoded}
 }

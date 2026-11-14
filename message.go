@@ -522,8 +522,8 @@ func encodeMessage(data Data) ([]byte, *EncodeError) {
 		out = append(out, strings.Join(texts, ",")...)
 		out = idAndReply(out, d.MessageID, nil, p)
 	case TelemetryBits:
-		if strings.ContainsRune(d.Project, '{') || hasLineBreak([]byte(d.Project)) {
-			p.note(newEncodeError(RefusalInvalidCharacter, "a telemetry project title has no { or line break (APRS12c ch. 13)"))
+		if strings.ContainsRune(d.Project, '{') || hasControl(d.Project) {
+			p.note(newEncodeError(RefusalInvalidCharacter, "a telemetry project title has no { or control character (APRS12c ch. 13)"))
 		}
 		if runeCount(d.Project) > 23 {
 			p.note(newEncodeError(RefusalTooLong, "a telemetry project title is up to 23 characters (APRS12c ch. 13)"))
@@ -621,8 +621,8 @@ func encodeBulletin(out []byte, addressee, text string, messageID *string, isNWS
 
 func encodeLabels(out []byte, addressee, prefix string, labels []string, messageID *string, p *pending) []byte {
 	for _, l := range labels {
-		if strings.ContainsAny(l, ",{") || hasLineBreak([]byte(l)) {
-			p.note(newEncodeError(RefusalInvalidCharacter, "telemetry metadata names are without commas, braces or line breaks (APRS12c ch. 13)"))
+		if strings.ContainsAny(l, ",{") || hasControl(l) {
+			p.note(newEncodeError(RefusalInvalidCharacter, "telemetry metadata names are without commas, braces or control characters (APRS12c ch. 13)"))
 			break
 		}
 	}
@@ -653,8 +653,8 @@ func messageText(out []byte, t string, limited bool, p *pending) []byte {
 	if strings.ContainsRune(t, '{') {
 		p.note(newEncodeError(RefusalInvalidCharacter, "message text must not contain '{', which starts the message ID (APRS12c ch. 14)"))
 	}
-	if hasLineBreak([]byte(t)) {
-		p.note(newEncodeError(RefusalInvalidCharacter, "message text cannot contain a line break"))
+	if hasControl(t) {
+		p.note(newEncodeError(RefusalInvalidCharacter, "message text cannot contain a control character"))
 	}
 	if limited && runeCount(t) > maxMessageText {
 		p.note(newEncodeError(RefusalTooLong, "message text is limited to 67 characters (APRS12c ch. 14)"))

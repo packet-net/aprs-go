@@ -8,6 +8,11 @@
 //
 // Encoding writes only what the spec allows, checking what it wrote by decoding it again. A
 // refusal is an *EncodeError whose Code says why, from the reasons the conformance vectors list.
+// An information field is at most 256 bytes: an encoder or builder refuses a longer one (RefusalInformationFieldTooLong, judged last), and
+// text with a control character in it (RefusalInvalidCharacter); a decoder sets no limit, and
+// warns of a control character (CodeControlCharacterInText).
+// Writing out a packet the program already holds (Packet.TNC2, AX25, KISS) is not encoding: the
+// information field goes out as it stands.
 // Station starts a fluent builder for each kind of packet a program sends.
 //
 // The package conforms to the language-neutral conformance vectors at

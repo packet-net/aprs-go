@@ -88,12 +88,18 @@ func decodeTelemetry(ctx *context, info []byte) Data {
 func encodeTelemetry(t *Telemetry) ([]byte, *EncodeError) {
 	p := &pending{}
 	// The sequence is fixed-form text: letters and digits, or MIC.
-	seqOK := t.Sequence != ""
+	// A sequence left out (the empty string, as for any absent text) is missing-field.
+	seqOK := true
 	for i := 0; i < len(t.Sequence); i++ {
 		seqOK = seqOK && isAlnum(t.Sequence[i])
 	}
-	if !seqOK {
+	switch {
+	case t.Sequence == "":
+		p.note(newEncodeError(RefusalMissingField, "a telemetry report needs a sequence (APRS12c ch. 13)"))
+	case !seqOK:
 		p.note(newEncodeError(RefusalMalformed, "a telemetry sequence is letters and digits"))
+	case len(t.Sequence) > 3 && t.Sequence[:3] == "MIC":
+		p.note(newEncodeError(RefusalMalformed, "a telemetry sequence that starts MIC is MIC itself (APRS12c ch. 13)"))
 	}
 	if len(t.Analog) > 5 {
 		p.note(newEncodeError(RefusalTooLong, "a telemetry report carries 5 analog values (APRS12c ch. 13)"))
@@ -110,8 +116,8 @@ func encodeTelemetry(t *Telemetry) ([]byte, *EncodeError) {
 	if t.Sequence == "MIC" && len(t.Analog) > 0 && t.Analog[0] == nil {
 		p.note(newEncodeError(RefusalValueHasNoForm, "T#MIC with an empty first channel does not read back as given, so it cannot be sent"))
 	}
-	if hasLineBreak([]byte(t.Comment)) {
-		p.note(newEncodeError(RefusalInvalidCharacter, "telemetry comment text cannot contain a line break"))
+	if hasControl(t.Comment) {
+		p.note(newEncodeError(RefusalInvalidCharacter, "telemetry comment text cannot contain a control character"))
 	}
 	out := []byte("T#")
 	out = append(out, t.Sequence...)
@@ -138,7 +144,7 @@ func encodeTelemetry(t *Telemetry) ([]byte, *EncodeError) {
 	if err := p.finish(); err != nil {
 		return nil, err
 	}
-	// A sequence that starts MIC but is not MIC would not read back, for one.
+	// The read-back is the safety net (a sequence starting MIC is refused as malformed above).
 	if back, ok := decodeTelemetry(newContext(Lenient), out).(Telemetry); ok &&
 		back.Sequence == t.Sequence && samePtr(back.Bits, t.Bits) && back.Comment == t.Comment && len(back.Analog) == len(t.Analog) {
 		same := true
@@ -152,5 +158,5 @@ func encodeTelemetry(t *Telemetry) ([]byte, *EncodeError) {
 			return out, nil
 		}
 	}
-	return nil, newEncodeError(RefusalTextReadsAsField, "the telemetry report would not read back as given (a sequence starting MIC is MIC itself)")
+	return nil, newEncodeError(RefusalTextReadsAsField, "the telemetry report would not read back as given")
 }

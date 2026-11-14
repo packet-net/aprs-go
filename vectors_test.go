@@ -11,6 +11,9 @@ package aprs_test
 //     case's canonical_info when it has one;
 //   - encode: an encode case writes the expected information field, or refuses with the expected
 //     reason;
+//   - build: a build case (a builder recipe) is built through this package's builders, by the same
+//     code as the dump tool's build mode (internal/recipe), and gives the expected TNC2 line or
+//     refuses with the expected reason;
 //   - readback: the neutral form of decoded data reads back into this package's types unchanged.
 //
 // Checks listed in testdata/known-differences.txt are skipped, each with its reason.
@@ -27,6 +30,7 @@ import (
 
 	aprs "github.com/packet-net/aprs-go"
 	"github.com/packet-net/aprs-go/internal/neutral"
+	"github.com/packet-net/aprs-go/internal/recipe"
 )
 
 const vectorsDir = "vectors"
@@ -110,6 +114,10 @@ func TestVectors(t *testing.T) {
 		}
 		if _, ok := input["encode"]; ok {
 			run("encode", encodeCheck)
+			continue
+		}
+		if _, ok := input["build"]; ok {
+			run("build", buildCheck)
 			continue
 		}
 		run("lenient", lenientCheck)
@@ -420,17 +428,12 @@ func encodeCheck(c vectorCase) []string {
 	input := c["input"].(map[string]any)
 	expect := c["expect"].(map[string]any)
 	wantRefused, _ := expect["refused"].(bool)
-	data, unreadable := neutral.ReadData(input["encode"])
+	data, pending, unreadable := neutral.ReadDataStandIn(input["encode"])
 	var p *aprs.Packet
 	var refusal *aprs.RefusalCode
 	var reason string
 	switch {
 	case unreadable != nil && !unreadable.Refused:
-		// The one record Go's types cannot hold, by name; anything else the reader cannot hold is
-		// a failure, not a skip.
-		if c["id"] == "encode/nested-third-party-ending-in-undecoded-data" {
-			return nil // undecoded data has no neutral form of its bytes (not-encodable)
-		}
 		return []string{"encode: this package's data cannot hold it: " + unreadable.Reason}
 	case unreadable != nil:
 		refusal, reason = &unreadable.Code, unreadable.Reason
@@ -438,11 +441,20 @@ func encodeCheck(c vectorCase) []string {
 		source := aprs.MustAddress(textOr(input, "source", "N0CALL"))
 		destination := aprs.MustAddress(textOr(input, "destination", "APZ001"))
 		created, err := aprs.NewPacket(source, destination, nil, data)
+		var encoder *aprs.RefusalCode
+		var why string
 		if err != nil {
 			code := err.(*aprs.EncodeError).Code()
-			refusal, reason = &code, err.Error()
+			encoder, why = &code, err.Error()
 		}
-		p = created
+		// An input this package cannot hold whose value alone decides a code was given a stand-in
+		// by the reader: the first code in the order among it and the encoder's decides.
+		if pending != nil || encoder != nil {
+			code, text, _ := neutral.Settle(pending, encoder, why)
+			refusal, reason = &code, text
+		} else {
+			p = created
+		}
 	}
 	if refusal != nil {
 		if !wantRefused {
@@ -464,6 +476,31 @@ func encodeCheck(c vectorCase) []string {
 		out = append(out, fmt.Sprintf("encode: expected destination %s, computed %s", d, p.Destination))
 	}
 	return out
+}
+
+func buildCheck(c vectorCase) []string {
+	input := c["input"].(map[string]any)["build"].(map[string]any)
+	expect := c["expect"].(map[string]any)
+	wantRefused, _ := expect["refused"].(bool)
+	o := recipe.Build(input)
+	switch {
+	case o.Unsupported != "":
+		return []string{"build: this package's builders cannot say it: " + o.Unsupported}
+	case o.Refusal != "":
+		if !wantRefused {
+			return []string{fmt.Sprintf("build: expected %s, but the builder refused: %s (%s)", neutral.Show(expect["tnc2"]), o.Refusal, o.Reason)}
+		}
+		if want, ok := expect["refusal"].(string); ok && o.Refusal != want {
+			return []string{fmt.Sprintf("build: refused with %s (%s), expected %s", o.Refusal, o.Reason, want)}
+		}
+		return nil
+	case wantRefused:
+		return []string{"build: expected a refusal, built " + show(o.Packet.TNC2())}
+	}
+	if got := string(o.Packet.TNC2()); got != expect["tnc2"].(string) {
+		return []string{fmt.Sprintf("build: expected %s, built %s", neutral.Show(expect["tnc2"]), show(o.Packet.TNC2()))}
+	}
+	return nil
 }
 
 func readbackCheck(c vectorCase) []string {

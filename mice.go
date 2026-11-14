@@ -3,6 +3,7 @@ package aprs
 import (
 	"bytes"
 	"fmt"
+	"math"
 )
 
 // Mic-E (APRS12c ch. 10): latitude, message code and digipeat path in the destination address;
@@ -279,9 +280,13 @@ func micEStatus(ctx *context, report *MicEReport, b []byte, offset int) bool {
 		// Base-91 telemetry and a !DAO! are lifted out before the locator is read, so a locator
 		// followed straight by them alone has nothing after it (vectors interpretations.md,
 		// "Where a Mic-E locator is read").
-		if len(s) > 0 && len(withoutTelemetryAndDAO(s)) > 0 {
-			if s[0] == ' ' {
-				s = drain(s, 0, 1)
+		if lifted := withoutTelemetryAndDAO(s); len(lifted) > 0 {
+			if lifted[0] == ' ' {
+				// Its space is the locator's even with telemetry before it in the bytes; one at the
+				// very start is dropped here, the other is the comment's own delimiter.
+				if s[0] == ' ' {
+					s = drain(s, 0, 1)
+				}
 			} else if !ctx.tolerate(CodeMissingSpaceAfterLocator, "text straight after the grid locator; a space comes first (APRS12c ch. 10)", offset) {
 				return false
 			}
@@ -620,14 +625,16 @@ func encodeMicE(r *MicEReport) (Address, []byte, *EncodeError) {
 		}
 		out = append(out, byte(t))
 	}
-	// Mic-E altitude is whole metres; one that is not exactly (a /A= altitude in feet, such as
-	// 30105, which is 9176 metres less 0.01 foot) goes in the text as /A=, so that it reads back
-	// the same (vectors README, Encoding).
+	// A Mic-E altitude goes in the Mic-E altitude bytes, in whole metres, unless it came from a
+	// /A= (AltitudeInComment) or only a /A= holds it exactly: a whole number of feet within six
+	// digits that the bytes do not hold exactly (vectors README, Encoding; interpretations.md, "A
+	// Mic-E altitude goes in the Mic-E altitude bytes"). A value neither holds is rounded to the
+	// metre.
 	var altitudeInText *float64
 	if f.AltitudeFeet != nil {
 		feet := *f.AltitudeFeet
 		metres := roundSteps(feet / metresToFeet)
-		if r.AltitudeInComment || !sameNumber(metres*metresToFeet, feet) {
+		if r.AltitudeInComment || micEAltitudeInText(r, feet, metres) {
 			altitudeInText = &feet
 		} else {
 			datum := metres + 10000
@@ -638,14 +645,15 @@ func encodeMicE(r *MicEReport) (Address, []byte, *EncodeError) {
 				out = base91Encode(out, toU32(datum), 3)
 				out = append(out, '}')
 				// With no type code before it (legacy telemetry is taken off first), a first
-				// byte that is one reads back as the type code, and beyond six digits no /A= can
-				// say the altitude instead.
+				// byte that is one reads back as the type code. A value a /A= holds exactly went
+				// to the text above; one it does not (not a whole number of feet, or beyond six
+				// digits) has no form.
 				legacy := 0
 				if len(r.LegacyTelemetry) > 0 {
 					legacy = 6
 				}
-				if r.TypeCode == nil && at == statusStart+legacy && isTypeCode(out[at]) && !inRange(roundSteps(feet), -99999, 999999) {
-					pend.note(newEncodeError(RefusalValueHasNoForm, "this Mic-E altitude has no form: its first byte would read as a type code and no /A= holds it"))
+				if r.TypeCode == nil && at == statusStart+legacy && isTypeCode(out[at]) {
+					pend.note(newEncodeError(RefusalValueHasNoForm, "this Mic-E altitude has no form: its first byte would read as a type code and no /A= holds it exactly"))
 				}
 			}
 		}
@@ -740,8 +748,8 @@ func encodeMicE(r *MicEReport) (Address, []byte, *EncodeError) {
 
 	text := []byte(f.Comment)
 	// A weather report has no comment: that is the fault, and the characters are not looked at.
-	if f.Weather == nil && hasLineBreak(text) {
-		pend.note(newEncodeError(RefusalInvalidCharacter, "comment text cannot contain a line break"))
+	if f.Weather == nil && hasControl(string(text)) {
+		pend.note(newEncodeError(RefusalInvalidCharacter, "comment text cannot contain a control character"))
 	}
 	var trailer []byte
 	if f.Telemetry != nil {
@@ -779,15 +787,26 @@ func encodeMicE(r *MicEReport) (Address, []byte, *EncodeError) {
 
 	textAt := len(out)
 	needsSpace := len(text) > 0 && f.Frequency != nil
-	// Status text that would start with a type code character or 0x1D (Rev 0 telemetry) is
+	// Status text that would start with a type code character is
 	// written after a /, even when it would read back without one (vectors README, Encoding). Only
 	// the start of the status text counts: after a type code or telemetry, it is written straight
 	// on.
-	statusStartsWithCode := textAt == statusStart && len(text) > 0 && (isTypeCode(text[0]) || text[0] == 0x1D)
+	statusStartsWithCode := textAt == statusStart && len(text) > 0 && isTypeCode(text[0])
 	var separators []string
 	switch {
 	case needsSpace:
 		separators = []string{" ", "", " /"}
+		// Free text after a frequency follows a space, and a / goes before it where it would not
+		// read back as itself without one: text that ends the status text as a device suffix
+		// would (" X"), so it is written " /X" rather than run on after the MHz (vectors README,
+		// "Delimiters at the start of free text").
+		if len(suffix) == 0 && r.TypeCode != nil {
+			t := byte(*r.TypeCode)
+			tail := append(append([]byte{' '}, text...), trailer...)
+			if micESuffixLen(&t, tail) > 0 {
+				separators = []string{" ", " /", ""}
+			}
+		}
 	case statusStartsWithCode:
 		separators = []string{"/"}
 	default:
@@ -815,6 +834,42 @@ func encodeMicE(r *MicEReport) (Address, []byte, *EncodeError) {
 		}
 	}
 	return Address{}, nil, newEncodeError(RefusalTextReadsAsField, "the status text does not read back as given: a device suffix the database does not know, or text that decodes as a structured element; set the property instead")
+}
+
+// sameMetres says whether two altitudes in feet are the same to the metre.
+func sameMetres(x, y *float64) bool {
+	if x == nil || y == nil {
+		return false
+	}
+	return roundSteps(*x/metresToFeet) == roundSteps(*y/metresToFeet)
+}
+
+// nearWhole says whether x is within 1e-6 of a whole number.
+func nearWhole(x float64) bool {
+	return isFinite(x) && math.Abs(x-math.Round(x)) <= 1e-6
+}
+
+// micEAltitudeInText says whether an altitude in neutral data goes in a /A= rather than in the
+// Mic-E altitude bytes: only when a /A= holds it exactly and the bytes do not. metres is the
+// altitude rounded to the metre. Where the bytes have no clean form (the first byte would read
+// as a type code, with no type code before it) and a /A= holds the value exactly, it goes in the
+// /A= as well.
+func micEAltitudeInText(r *MicEReport, feet, metres float64) bool {
+	if !nearWhole(feet) || !inRange(roundSteps(feet), -99999, 999999) {
+		return false
+	}
+	if !nearWhole(feet/metresToFeet) || !inRange(metres, -10000, 743570) {
+		return true
+	}
+	if r.TypeCode == nil {
+		var first [3]byte
+		datum := toU32(metres + 10000)
+		first[0] = byte(33 + datum/(91*91))
+		if isTypeCode(first[0]) {
+			return true
+		}
+	}
+	return false
 }
 
 func micEReadsBack(r *MicEReport, status []byte) bool {
@@ -859,6 +914,7 @@ func micEReadsBack(r *MicEReport, status []byte) bool {
 		samePtr(datum(a.DAO), datum(b.DAO)) &&
 		sameFrequencyFields(a.Frequency, b.Frequency) &&
 		// A /A= altitude is whole feet, rounded as a position's is.
-		(close(a.AltitudeFeet, b.AltitudeFeet) || samePtr(round(a.AltitudeFeet), round(b.AltitudeFeet))) &&
+		// In the Mic-E altitude bytes it is whole metres, the value given rounded to the metre.
+		(close(a.AltitudeFeet, b.AltitudeFeet) || samePtr(round(a.AltitudeFeet), round(b.AltitudeFeet)) || sameMetres(a.AltitudeFeet, b.AltitudeFeet)) &&
 		samePtr(round(a.RangeMiles), round(b.RangeMiles))
 }

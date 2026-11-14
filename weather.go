@@ -74,6 +74,33 @@ func weatherFields(ctx *context, b []byte, offset int, w *Weather, wind windMode
 		if width > 0 && contains(seen, key) {
 			break
 		}
+		// A fixed-width value that runs on by two or more digits, to the end of the information
+		// field or into a defined field that is still to be read, is out of range and dropped; the
+		// fields carry on after the run (vectors interpretations.md, "A weather field that runs
+		// on by many digits"). Snowfall keeps its width, so it is not looked at here.
+		if width > 0 && !snow {
+			if n := runOnLength(b, at, width, letter); n > 0 {
+				end := at + 1 + n
+				// The run's own field counts as read, so a following letter of the same field does
+				// not qualify (a following s after a wind speed is snowfall, another field).
+				after, afterRun := append(seen[:len(seen):len(seen)], key), run
+				afterDirection, afterSpeed := directionKnown, speedKnown
+				switch {
+				case letter == 'c':
+					afterDirection, afterRun.direction = true, true
+				case letter == 's':
+					afterSpeed, afterRun.speed = true, true
+				}
+				if end == len(b) || startsReadableField(b, end, wind, after, afterRun, afterDirection, afterSpeed) {
+					if !ctx.tolerate(CodeOutOfRangeValue, "a weather value that runs on by two or more digits was dropped", offset+at) {
+						return weatherRun{}, false
+					}
+					seen, run, directionKnown, speedKnown = after, afterRun, afterDirection, afterSpeed
+					at = end
+					continue
+				}
+			}
+		}
 		var v *float64
 		n := 0
 		found := false
@@ -135,6 +162,57 @@ func weatherFields(ctx *context, b []byte, offset int, w *Weather, wind windMode
 	}
 	run.length = at
 	return run, true
+}
+
+// runOnLength gives the length of the value after the letter at at when it is digits that run on
+// by two or more past the field's width (a negative temperature's minus sign is one of the
+// width), else 0.
+func runOnLength(b []byte, at, width int, letter byte) int {
+	start := at + 1
+	if letter == 't' && start < len(b) && b[start] == '-' {
+		start++
+	}
+	run := 0
+	for _, c := range b[start:] {
+		if !isDigit(c) {
+			break
+		}
+		run++
+	}
+	n := run + (start - (at + 1))
+	if n >= width+2 {
+		return n
+	}
+	return 0
+}
+
+// startsReadableField says whether a defined weather field, not already read and with a value,
+// starts at b[at], as the run of fields would read it there. seen, run and the known flags are as
+// they are after the run, which counts as having read its own field.
+func startsReadableField(b []byte, at int, wind windMode, seen []byte, run weatherRun, directionKnown, speedKnown bool) bool {
+	letter := b[at]
+	if !isWeatherLetter(letter) || (letter == 'c' && directionKnown) {
+		return false
+	}
+	snow := letter == 's' && (speedKnown || (wind == windAsFields && !run.direction))
+	key := letter
+	if letter == 's' && snow {
+		key = 'S'
+	} else if letter == 'l' {
+		key = 'L'
+	}
+	if contains(seen, key) {
+		return false
+	}
+	width := 3
+	switch letter {
+	case 'h':
+		width = 2
+	case 'b':
+		width = 5
+	}
+	_, _, found, _ := weatherValue(newContext(Lenient), b, at, 0, width, letter, snow)
+	return found
 }
 
 func isWeatherLetter(letter byte) bool {

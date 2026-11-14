@@ -437,7 +437,7 @@ func footprintText(value float64, text string, limit float64, what string) (stri
 
 // decodeCapabilities reads TOKEN,TOKEN=VALUE,...
 func decodeCapabilities(ctx *context, info []byte) Data {
-	body, ok := decodeText(ctx, info[1:], 1)
+	body, ok := decodeTextUnjudged(ctx, info[1:], 1)
 	if !ok {
 		return nil
 	}
@@ -471,6 +471,15 @@ func decodeCapabilities(ctx *context, info []byte) Data {
 	if freeText && !ctx.tolerate(CodeFreeTextCapabilities, "a capabilities packet holds free text rather than TOKEN / TOKEN=VALUE items (APRS12c ch. 15)", 1) {
 		return nil
 	}
+	// A value is text: a control character in one is also a defect of its own, judged last.
+	for _, c := range items {
+		if c.Value != nil && hasControl(*c.Value) {
+			if !ctx.tolerate(CodeControlCharacterInText, "a capability value with a control character in it (a byte below 0x20 or 0x7F); APRS12c gives text as printable characters", 1) {
+				return nil
+			}
+			break
+		}
+	}
 	return Capabilities{Capabilities: items}
 }
 
@@ -502,7 +511,7 @@ func decodeUserDefined(ctx *context, info []byte) Data {
 }
 
 func decodeTestData(ctx *context, info []byte) Data {
-	text, ok := decodeText(ctx, info[1:], 1)
+	text, ok := decodeTextUnjudged(ctx, info[1:], 1)
 	if !ok {
 		return nil
 	}
@@ -521,8 +530,8 @@ func decodeAgrelo(ctx *context, info []byte) Data {
 
 func encodeOther(data Data) ([]byte, *EncodeError) {
 	printable := func(t, what string) *EncodeError {
-		if hasLineBreak([]byte(t)) {
-			return newEncodeError(RefusalInvalidCharacter, what+" cannot contain a line break")
+		if hasControl(t) {
+			return newEncodeError(RefusalInvalidCharacter, what+" cannot contain a control character")
 		}
 		return nil
 	}
@@ -535,10 +544,13 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 	case WeatherReport:
 		p := &pending{}
 		var t *Timestamp
-		if d.Timestamp != nil && d.Timestamp.Kind == MonthDayHourMinute {
+		switch {
+		case d.Timestamp == nil:
+			p.note(newEncodeError(RefusalMissingField, "a positionless weather report needs a timestamp (APRS12c ch. 12)"))
+		case d.Timestamp.Kind == MonthDayHourMinute:
 			p.run(checkTimestamp(*d.Timestamp))
 			t = d.Timestamp
-		} else {
+		default:
 			p.note(newEncodeError(RefusalInvalidTimestamp, "a positionless weather report has an MDHM timestamp (APRS12c ch. 12)"))
 		}
 		if d.Comment != "" {
@@ -717,8 +729,9 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 			return nil, newEncodeError(RefusalInvalidCharacter, "user-defined data cannot end with a line break, which would not read back")
 		}
 	case TestData:
-		if err := printable(d.Data, "test data"); err != nil {
-			return nil, err
+		// Test data is data, not text: only a line break would not read back.
+		if hasLineBreak([]byte(d.Data)) {
+			return nil, newEncodeError(RefusalInvalidCharacter, "test data cannot contain a line break")
 		}
 		out = append(out, ',')
 		out = append(out, d.Data...)
@@ -747,8 +760,8 @@ func encodeNMEA(n *NMEA) ([]byte, *EncodeError) {
 			p.note(newEncodeError(RefusalNotANumber, "an NMEA field is not a number"))
 		}
 	}
-	if hasLineBreak([]byte(n.Comment)) {
-		p.note(newEncodeError(RefusalInvalidCharacter, "an NMEA comment cannot contain a line break"))
+	if hasControl(n.Comment) {
+		p.note(newEncodeError(RefusalInvalidCharacter, "an NMEA comment cannot contain a control character"))
 	}
 	// $ULTW is raw weather, not NMEA, so such a sentence would not read back.
 	structure, ok := nmeaSentenceOf(sentence)

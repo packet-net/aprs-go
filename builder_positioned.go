@@ -8,7 +8,8 @@ func (b PositionBuilder) At(latitude, longitude float64) PositionBuilder {
 	return b
 }
 
-// Symbol sets how to draw it, such as SymbolCar.
+// Symbol sets how to draw it, such as SymbolCar. A report built without one is refused as
+// invalid-symbol.
 func (b PositionBuilder) Symbol(symbol Symbol) PositionBuilder {
 	b.common.symbol = &symbol
 	return b
@@ -134,7 +135,8 @@ func (b ObjectBuilder) At(latitude, longitude float64) ObjectBuilder {
 	return b
 }
 
-// Symbol sets how to draw it, such as SymbolCar.
+// Symbol sets how to draw it, such as SymbolCar. A report built without one is refused as
+// invalid-symbol.
 func (b ObjectBuilder) Symbol(symbol Symbol) ObjectBuilder {
 	b.common.symbol = &symbol
 	return b
@@ -260,7 +262,8 @@ func (b ItemBuilder) At(latitude, longitude float64) ItemBuilder {
 	return b
 }
 
-// Symbol sets how to draw it, such as SymbolCar.
+// Symbol sets how to draw it, such as SymbolCar. A report built without one is refused as
+// invalid-symbol.
 func (b ItemBuilder) Symbol(symbol Symbol) ItemBuilder {
 	b.common.symbol = &symbol
 	return b
@@ -386,7 +389,8 @@ func (b MicEBuilder) At(latitude, longitude float64) MicEBuilder {
 	return b
 }
 
-// Symbol sets how to draw it, such as SymbolCar.
+// Symbol sets how to draw it, such as SymbolCar. A report built without one is refused as
+// invalid-symbol.
 func (b MicEBuilder) Symbol(symbol Symbol) MicEBuilder {
 	b.common.symbol = &symbol
 	return b
@@ -412,7 +416,9 @@ func (b MicEBuilder) SpeedKmh(kilometresPerHour float64) MicEBuilder {
 	return b.SpeedKnots(kilometresPerHour / 1.852)
 }
 
-// AltitudeFeet sets the altitude above mean sea level in feet (/A=), sent to the nearest foot.
+// AltitudeFeet sets the altitude above mean sea level in feet, written in the Mic-E altitude
+// bytes, rounded once to the nearest metre (1000 feet is 305 metres). One outside -10000 to
+// 743570 metres is refused as out of range.
 func (b MicEBuilder) AltitudeFeet(feet float64) MicEBuilder {
 	b.common.fields.AltitudeFeet = Ptr(feet)
 	b.common.altitudeM = nil

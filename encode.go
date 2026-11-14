@@ -22,6 +22,14 @@ func Encode(data Data) ([]byte, error) {
 }
 
 func encode(data Data) ([]byte, *EncodeError) {
+	out, err := encodeData(data)
+	if err == nil && len(out) > maxInformationField {
+		return nil, newEncodeError(RefusalInformationFieldTooLong, fmt.Sprintf("an information field is at most 256 bytes (APRS12c ch. 3), and this one is %d", len(out)))
+	}
+	return out, err
+}
+
+func encodeData(data Data) ([]byte, *EncodeError) {
 	data, err := prepare(data)
 	if err != nil {
 		return nil, err
@@ -259,8 +267,8 @@ func encodePositioned(out []byte, f *Positioned, p *pending) ([]byte, *EncodeErr
 
 	text := []byte(f.Comment)
 	// A weather report has no comment: that is the fault, and the characters are not looked at.
-	if f.Weather == nil && hasLineBreak(text) {
-		p.note(newEncodeError(RefusalInvalidCharacter, "comment text cannot contain a line break"))
+	if f.Weather == nil && hasControl(string(text)) {
+		p.note(newEncodeError(RefusalInvalidCharacter, "comment text cannot contain a control character"))
 	}
 	textAt := len(out)
 	var trailer []byte
@@ -782,10 +790,7 @@ func whole(v *float64, what string) (*uint32, *EncodeError) {
 
 func stormValue(out []byte, v *uint16, width int) ([]byte, *EncodeError) {
 	if v == nil {
-		for i := 0; i < width; i++ {
-			out = append(out, '.')
-		}
-		return out, nil
+		return out, newEncodeError(RefusalMissingField, "storm data needs all its fields: a storm field is digits, never dots (APRS12c ch. 12)")
 	}
 	limit := uint32(1)
 	for i := 0; i < width; i++ {

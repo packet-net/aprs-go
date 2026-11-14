@@ -121,8 +121,8 @@ func encodeStatus(s *Status) ([]byte, *EncodeError) {
 	default:
 		p.note(newEncodeError(RefusalMissingField, "a status grid locator and its symbol go together"))
 	}
-	if hasLineBreak([]byte(s.Text)) {
-		p.note(newEncodeError(RefusalInvalidCharacter, "status text cannot contain a line break"))
+	if hasControl(s.Text) {
+		p.note(newEncodeError(RefusalInvalidCharacter, "status text cannot contain a control character"))
 	}
 	out = append(out, s.Text...)
 	if b := s.Beam; b != nil {

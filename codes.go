@@ -27,6 +27,8 @@ const (
 	CodeTrailingLineBreak
 	// CodeNonUTF8Text: Text that is not valid UTF-8 (UAP 5.16).
 	CodeNonUTF8Text
+	// CodeControlCharacterInText: Text holds a byte below 0x20 or the byte 0x7F (a TAB, or a CR or LF inside the text, included); one per text, which is kept as sent (APRS12c gives text as printable characters).
+	CodeControlCharacterInText
 	// CodeTruncated: The information field is shorter than its format requires.
 	CodeTruncated
 	// CodeNotAprs: The first byte is not a data type identifier (APRS12c ch. 20).
@@ -133,6 +135,8 @@ const (
 	CodeLetterGroupBulletin
 	// CodeFreeTextCapabilities: A < station capabilities packet holds free text rather than TOKEN / TOKEN=VALUE items: a token that is empty or holds a space or a control character, or a value that holds a control character (APRS12c ch. 15).
 	CodeFreeTextCapabilities
+	// CodeImplementationLimit: The packet needs more than the implementation's fixed capacity holds. This library has no fixed capacity, so it never gives this code; it is listed so the codes match the vectors.
+	CodeImplementationLimit
 )
 
 var codeIDs = [...]string{
@@ -147,6 +151,7 @@ var codeIDs = [...]string{
 	CodeTooManyDigipeaters:           "too-many-digipeaters",
 	CodeTrailingLineBreak:            "trailing-line-break",
 	CodeNonUTF8Text:                  "non-utf8-text",
+	CodeControlCharacterInText:       "control-character-in-text",
 	CodeTruncated:                    "truncated",
 	CodeNotAprs:                      "not-aprs",
 	CodeReservedDataType:             "reserved-data-type",
@@ -200,6 +205,7 @@ var codeIDs = [...]string{
 	CodeInvalidAddresseeCharacters:   "invalid-addressee-characters",
 	CodeLetterGroupBulletin:          "letter-group-bulletin",
 	CodeFreeTextCapabilities:         "free-text-capabilities",
+	CodeImplementationLimit:          "implementation-limit",
 }
 
 var codeTolerable = [...]bool{
@@ -210,6 +216,7 @@ var codeTolerable = [...]bool{
 	CodeInvalidAX25AddressCharacters: true,
 	CodeTrailingLineBreak:            true,
 	CodeNonUTF8Text:                  true,
+	CodeControlCharacterInText:       true,
 	CodeOutOfRangeValue:              true,
 	CodeInvalidTimestamp:             true,
 	CodeLowercaseHemisphere:          true,

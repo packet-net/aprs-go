@@ -1,4 +1,4 @@
-package main
+package recipe
 
 import (
 	"fmt"
@@ -16,6 +16,12 @@ import (
 type notSupported struct{ reason string }
 
 func (e *notSupported) Error() string { return e.reason }
+
+// missingField says a recipe left out something the report needs, which the builder takes as an
+// argument and so has no default for.
+type missingField struct{ reason string }
+
+func (e *missingField) Error() string { return e.reason }
 
 func unsupported(format string, a ...any) error {
 	return &notSupported{reason: fmt.Sprintf(format, a...)}
@@ -535,10 +541,13 @@ func build(input map[string]any) (*aprs.Packet, error) {
 		if err != nil {
 			return nil, err
 		}
+		// The builder takes the sequence as an argument, so a recipe without one is built with
+		// 0 for the station's sake, and its data with no sequence goes to the encoder.
 		var seq uint16
 		if sequence != nil {
 			seq = uint16(*sequence)
 		}
+		missingSequence := sequence == nil
 		b := station.Telemetry(seq)
 		if v := args.get("analog"); v != nil {
 			list, ok := v.([]any)
@@ -579,7 +588,27 @@ func build(input map[string]any) (*aprs.Packet, error) {
 		if err := args.allTaken(); err != nil {
 			return nil, err
 		}
-		return b.Build()
+		p, err := b.Build()
+		if missingSequence {
+			// The builder takes the sequence as an argument, so the recipe was built with 0 to see
+			// what else is wrong with the station. The data itself, with no sequence, goes to the
+			// encoder, which refuses missing-field at its place in the order (and the size, last,
+			// is never measured on a record that is refused).
+			if _, bad := err.(*aprs.InvalidAddressError); bad {
+				return nil, err
+			}
+			data, err := b.Data()
+			if err != nil {
+				return nil, err
+			}
+			t := data.(aprs.Telemetry)
+			t.Sequence = ""
+			if _, err := aprs.Encode(t); err != nil {
+				return nil, err
+			}
+			return nil, &missingField{reason: "a telemetry report has a sequence number (APRS12c ch. 13)"}
+		}
+		return p, err
 	case "telemetry-names", "telemetry-units":
 		addressee, err := args.text("addressee")
 		if err != nil {
@@ -663,6 +692,10 @@ func stationOf(v any) (aprs.Station, error) {
 		return s, ok
 	}
 	source, _ := text("source")
+	if v == nil {
+		// A recipe with no station is from N0CALL, with the builder's own destination and no path.
+		source = "N0CALL"
+	}
 	station, err := aprs.NewStation(source)
 	if err != nil {
 		return station, err
