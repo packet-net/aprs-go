@@ -14,8 +14,11 @@ import (
 
 // Parse reads JSON into neutral values: a whole number as JSON writes it (no point, no exponent)
 // is an int64 when it fits, and any other number a float64.
+//
+// The tokens NaN, Infinity and -Infinity, which the generator writes for a value that is not a
+// finite number, are read as that float.
 func Parse(text []byte) (any, error) {
-	d := json.NewDecoder(bytes.NewReader(text))
+	d := json.NewDecoder(bytes.NewReader(nonFiniteTokens(text)))
 	d.UseNumber()
 	var v any
 	if err := d.Decode(&v); err != nil {
@@ -24,8 +27,64 @@ func Parse(text []byte) (any, error) {
 	return convert(v), nil
 }
 
+const (
+	nanToken    = "\x00NaN"
+	infToken    = "\x00Inf"
+	negInfToken = "\x00-Inf"
+)
+
+// nonFiniteTokens replaces the bare NaN, Infinity and -Infinity tokens (outside strings) with
+// strings convert turns back into floats.
+func nonFiniteTokens(text []byte) []byte {
+	if !bytes.Contains(text, []byte("NaN")) && !bytes.Contains(text, []byte("Infinity")) {
+		return text
+	}
+	out := make([]byte, 0, len(text)+16)
+	inString := false
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if inString {
+			out = append(out, c)
+			if c == '\\' && i+1 < len(text) {
+				i++
+				out = append(out, text[i])
+			} else if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch {
+		case c == '"':
+			inString = true
+			out = append(out, c)
+		case bytes.HasPrefix(text[i:], []byte("NaN")):
+			out = append(out, `"\u0000NaN"`...)
+			i += 2
+		case bytes.HasPrefix(text[i:], []byte("-Infinity")):
+			out = append(out, `"\u0000-Inf"`...)
+			i += 8
+		case bytes.HasPrefix(text[i:], []byte("Infinity")):
+			out = append(out, `"\u0000Inf"`...)
+			i += 7
+		default:
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 func convert(v any) any {
 	switch x := v.(type) {
+	case string:
+		switch x {
+		case nanToken:
+			return math.NaN()
+		case infToken:
+			return math.Inf(1)
+		case negInfToken:
+			return math.Inf(-1)
+		}
+		return x
 	case json.Number:
 		s := string(x)
 		if !strings.ContainsAny(s, ".eE") {
@@ -861,6 +920,19 @@ func readKind(o *keys, kind string) (aprs.Data, *Unreadable) {
 }
 
 func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
+	// Count the levels of the input iteratively before recursing into any of them.
+	depth := 1
+	for cur := o.o; depth <= 5; depth++ {
+		inner, _ := cur["packet"].(map[string]any)
+		data, _ := inner["data"].(map[string]any)
+		if t, _ := data["type"].(string); t != "third-party" {
+			break
+		}
+		cur = data
+	}
+	if depth > 4 {
+		return nil, refused(aprs.RefusalInvalidThirdPartyHeader, "third-party packets nest at most four deep")
+	}
 	// The inner packet as the neutral form gives it: its source may be any third-party source
 	// (APRS12c ch. 17), and its diagnostics are part of the data. This package keeps the inner
 	// information field as received, which the neutral form does not carry, so it is the inner
@@ -915,8 +987,21 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 		}
 		diagnostics = append(diagnostics, diagnostic)
 	}
-	// The header is written before the data, so a header the encoder cannot write back is refused
-	// before the inner data is looked at.
+	dataValue := p.get("data")
+	if dataValue == nil {
+		return nil, p.missing("data")
+	}
+	data, err := ReadData(dataValue)
+	if err != nil && !err.Refused {
+		return nil, err
+	}
+	// Undecoded data has no neutral form of its bytes: not-encodable, the first of the refusal
+	// reasons, which no header fault outranks.
+	if d, ok := data.(aprs.Unrecognized); ok && d != aprs.UnrecognizedEmpty {
+		return nil, unsupported("packet.data: undecoded, and its bytes are not in the neutral form")
+	}
+	// A header the encoder cannot write back is refused before the inner data's own faults are
+	// named (invalid-third-party-header comes before them in the refusal order).
 	headerDefect := false
 	for _, d := range diagnostics {
 		headerDefect = headerDefect || isHeaderDefect(d.Code)
@@ -934,11 +1019,6 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 	if headerDefect || usedOutOfOrder {
 		return nil, refused(aprs.RefusalInvalidThirdPartyHeader, "the third-party packet's header cannot be written back")
 	}
-	dataValue := p.get("data")
-	if dataValue == nil {
-		return nil, p.missing("data")
-	}
-	data, err := ReadData(dataValue)
 	if err != nil {
 		return nil, err
 	}
@@ -1080,10 +1160,11 @@ func readPositioned(o *keys) (aprs.Positioned, *Unreadable) {
 	if err != nil {
 		return f, err
 	}
-	if symbol == nil {
-		return f, o.missing("symbol")
+	// A symbol the neutral data leaves out is empty text: the zero Symbol, which the encoder
+	// refuses as invalid-symbol.
+	if symbol != nil {
+		f.Symbol = *symbol
 	}
-	f.Symbol = *symbol
 	if f.Compressed, err = o.flag("compressed"); err != nil {
 		return f, err
 	}

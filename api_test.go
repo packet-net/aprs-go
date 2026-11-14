@@ -529,3 +529,53 @@ func TestDeviceFeaturesAreACopy(t *testing.T) {
 	}
 	t.Skip("no device with features found to try")
 }
+
+// A telemetry builder given six analog values and a line break in the comment refuses with the
+// line break (invalid-character), which the refusal order puts before too-long.
+func TestTelemetryBuilderRefusesInEncoderOrder(t *testing.T) {
+	v := func(x float64) *float64 { return &x }
+	st := me(t)
+	_, err := st.Telemetry(1).Analog(v(1), v(2), v(3), v(4), v(5), v(6)).Comment("a\rb").Build()
+	if err == nil {
+		t.Fatal("expected a refusal")
+	}
+	eq(t, err.(*aprs.EncodeError).Code(), aprs.RefusalInvalidCharacter)
+	_, err = st.Telemetry(1).Analog(v(1), v(2), v(3), v(4), v(5), v(6)).Build()
+	eq(t, err.(*aprs.EncodeError).Code(), aprs.RefusalTooLong)
+}
+
+// A setter replaces its quantity whatever unit it was given in: the last call wins.
+func TestBuilderSetterReplacesAcrossUnits(t *testing.T) {
+	a, err := me(t).Position(49.5, -72.5).Symbol(aprs.SymbolCar).SpeedKnots(10).SpeedKmh(18.52).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := me(t).Position(49.5, -72.5).Symbol(aprs.SymbolCar).SpeedKmh(18.52).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, string(a.Information), string(b.Information))
+}
+
+// A speed that is not a number is not-a-number, not out of range, in the three-digit form too.
+func TestNonFiniteSpeedIsNotANumber(t *testing.T) {
+	for _, v := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		_, err := aprs.Encode(aprs.PositionReport{Fields: aprs.Positioned{Position: aprs.Position{Latitude: 49.5, Longitude: -72.5}, Symbol: aprs.SymbolCar, SpeedKnots: aprs.Ptr(v), CourseDegrees: aprs.Ptr(88.0)}})
+		if err == nil {
+			t.Fatalf("speed %v: expected a refusal", v)
+		}
+		eq(t, err.(*aprs.EncodeError).Code(), aprs.RefusalNotANumber)
+	}
+}
+
+// A number that is not one is named before the faults that rank after it: an NMEA field beside a
+// bad sentence or a comment with a line break, and a compressed longitude beside a latitude out of
+// range.
+func TestNotANumberOutranksLaterCodes(t *testing.T) {
+	_, err := aprs.Encode(aprs.NMEA{Sentence: "GPRMC,1*4G", CourseDegrees: aprs.Ptr(math.NaN())})
+	eq(t, err.(*aprs.EncodeError).Code(), aprs.RefusalNotANumber)
+	_, err = aprs.Encode(aprs.NMEA{Sentence: "GPRMC,063909,A*00", Longitude: aprs.Ptr(math.Inf(1)), Comment: "a\rb"})
+	eq(t, err.(*aprs.EncodeError).Code(), aprs.RefusalNotANumber)
+	_, err = aprs.Encode(aprs.PositionReport{Fields: aprs.Positioned{Position: aprs.Position{Latitude: 90.0001, Longitude: math.NaN()}, Symbol: aprs.SymbolCar, Compressed: true}})
+	eq(t, err.(*aprs.EncodeError).Code(), aprs.RefusalNotANumber)
+}

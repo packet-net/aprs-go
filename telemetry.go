@@ -95,7 +95,9 @@ func encodeTelemetry(t *Telemetry) ([]byte, *EncodeError) {
 	if !seqOK {
 		p.note(newEncodeError(RefusalMalformed, "a telemetry sequence is letters and digits"))
 	}
-	if len(t.Analog) != 5 {
+	if len(t.Analog) > 5 {
+		p.note(newEncodeError(RefusalTooLong, "a telemetry report carries 5 analog values (APRS12c ch. 13)"))
+	} else if len(t.Analog) != 5 {
 		p.note(newEncodeError(RefusalMalformed, "a telemetry report carries 5 analog values (APRS12c ch. 13)"))
 	}
 	switch {

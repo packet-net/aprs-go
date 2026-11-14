@@ -474,11 +474,18 @@ func decodeCapabilities(ctx *context, info []byte) Data {
 	return Capabilities{Capabilities: items}
 }
 
+// maxThirdPartyDepth is how many third-party headers a decoder reads, one inside another.
+const maxThirdPartyDepth = 4
+
 // decodeThirdParty reads } and a whole TNC2 packet, decoded with the same options. Its source may
 // be any 1-9 printable ASCII characters other than > and : (APRS12c ch. 17); a defect its header
 // may tolerate is a warning on the inner packet, and rejects it when not tolerated.
 func decodeThirdParty(ctx *context, info []byte) Data {
-	inner, err := decodeTNC2Line(info[1:], ctx.options, true)
+	if ctx.depth >= maxThirdPartyDepth {
+		ctx.error(CodeInvalidThirdParty, "third-party packets nest at most four deep", 1)
+		return nil
+	}
+	inner, err := decodeTNC2Line(info[1:], ctx.options, ctx.depth+1)
 	if err != nil {
 		ctx.error(CodeInvalidThirdParty, "the third-party header is not SOURCE>DEST,PATH: (APRS12c ch. 17)", 1)
 		return nil
@@ -580,8 +587,8 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 		return encodeNMEA(&d)
 	case MaidenheadBeacon:
 		p := &pending{}
-		if !isLocator([]byte(d.Locator)) {
-			p.note(newEncodeError(RefusalMalformed, "a grid locator is 4 or 6 characters, e.g. IO91 or IO91SX"))
+		if !isLocator([]byte(d.Locator)) || d.Locator != asciiUpper(d.Locator) {
+			p.note(newEncodeError(RefusalMalformed, "a grid locator is 4 or 6 upper-case characters, e.g. IO91 or IO91SX"))
 		}
 		p.run(printable(d.Comment, "a beacon comment"))
 		if err := p.finish(); err != nil {
@@ -655,6 +662,35 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 			}
 		}
 	case ThirdParty:
+		// Walk the chain iteratively, counting levels before anything else is looked at: a
+		// caller-built chain thousands deep is refused without recursion.
+		depth := 0
+		for cur := Data(d); ; {
+			var tp ThirdParty
+			switch x := cur.(type) {
+			case ThirdParty:
+				tp = x
+			case *ThirdParty:
+				if x == nil {
+					depth = -1
+				} else {
+					tp = *x
+				}
+			default:
+				depth = -1
+			}
+			if depth < 0 {
+				break
+			}
+			depth++
+			if depth > maxThirdPartyDepth {
+				return nil, newEncodeError(RefusalInvalidThirdPartyHeader, "third-party packets nest at most four deep")
+			}
+			if tp.Packet == nil {
+				break
+			}
+			cur = tp.Packet.Data
+		}
 		if d.Packet == nil {
 			return nil, newEncodeError(RefusalMissingField, "a third-party packet carries a packet")
 		}
@@ -705,6 +741,12 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 func encodeNMEA(n *NMEA) ([]byte, *EncodeError) {
 	p := &pending{}
 	sentence := []byte(n.Sentence)
+	// A number that is not one is named before anything else about the sentence.
+	for _, v := range []*float64{n.Latitude, n.Longitude, n.CourseDegrees, n.SpeedKnots, n.AltitudeM} {
+		if v != nil && !isFinite(*v) {
+			p.note(newEncodeError(RefusalNotANumber, "an NMEA field is not a number"))
+		}
+	}
 	if hasLineBreak([]byte(n.Comment)) {
 		p.note(newEncodeError(RefusalInvalidCharacter, "an NMEA comment cannot contain a line break"))
 	}

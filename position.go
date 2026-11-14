@@ -267,6 +267,14 @@ func checkSymbol(s Symbol) *EncodeError {
 func encodeUncompressed(out []byte, position Position, symbol Symbol, dao *bool, p *pending) ([]byte, *[2]byte) {
 	p.run(checkSymbol(symbol))
 	position = checkedPosition(position, p)
+	if a := position.Ambiguity; a >= 1 && a <= 4 {
+		// A position at 90 degrees latitude or 180 degrees longitude has a box centred past it,
+		// which no form holds: a decoder reports the centre.
+		half := uint64([...]float64{1, 10, 100, 1000, 6000}[a] / 2)
+		if cutToBox(position.Latitude, a)+half > 90*6000 || cutToBox(position.Longitude, a)+half > 180*6000 {
+			p.note(newEncodeError(RefusalValueHasNoForm, "an ambiguous position at 90 degrees latitude or 180 degrees longitude has a box centred past it"))
+		}
+	}
 	if position.Ambiguity > 0 && dao != nil {
 		p.note(newEncodeError(RefusalFieldNotAllowed, "a !DAO! adds precision to an ambiguous position, which contradicts it"))
 	}
@@ -343,9 +351,18 @@ func coordinate(value float64, degreeDigits int, ambiguity uint8, dao *bool) ([]
 	}
 	// Rounding then blanking keeps the box the position is in, and a decoded position (the centre
 	// of its box) writes back the same digits.
-	units := toU64(roundSteps(value * 60 * perMinute))
-	extra := byte(units % extraBase)
-	units /= extraBase
+	var units uint64
+	var extra byte
+	if ambiguity > 0 && dao == nil {
+		// An ambiguous position is cut to its box, not rounded and then cut again: a value within
+		// a rounding step of 90 or 180 degrees is in the box below the edge (vectors
+		// interpretations.md, the ambiguity box).
+		units = cutToBox(value, ambiguity)
+	} else {
+		units = toU64(roundSteps(value * 60 * perMinute))
+		extra = byte(units % extraBase)
+		units /= extraBase
+	}
 	// units is now hundredths of a minute.
 	degrees := units / 6000
 	hundredths := units % 6000
@@ -359,6 +376,14 @@ func coordinate(value float64, degreeDigits int, ambiguity uint8, dao *bool) ([]
 	return text, extra
 }
 
+// cutToBox gives a position's hundredths of a minute cut to the start of its ambiguity box
+// (1-4 digits blanked). A value within 1e-6 of a box's edge below it, in boxes, is on the edge.
+func cutToBox(degrees float64, ambiguity uint8) uint64 {
+	size := [...]float64{1, 10, 100, 1000, 6000}[ambiguity]
+	boxes := math.Abs(degrees) * 6000 / size
+	return toU64(math.Floor(boxes+1e-6) * size)
+}
+
 // encodeCompressed writes a compressed position: table, latitude, longitude, symbol code. The cs
 // and type bytes follow separately.
 func encodeCompressed(out []byte, position Position, symbol Symbol, p *pending) []byte {
@@ -367,11 +392,13 @@ func encodeCompressed(out []byte, position Position, symbol Symbol, p *pending) 
 		p.note(newEncodeError(RefusalFieldNotAllowed, "a compressed position cannot be ambiguous"))
 	}
 	if !inRange(position.Latitude, -90, 90) || !inRange(position.Longitude, -180, 180) {
-		value := position.Latitude
-		if inRange(position.Latitude, -90, 90) {
-			value = position.Longitude
+		// Each coordinate is judged on its own, so a NaN longitude outranks a latitude out of range.
+		if !inRange(position.Latitude, -90, 90) {
+			p.note(newEncodeError(refusalForValue(position.Latitude), "latitude must be -90 to 90 degrees"))
 		}
-		p.note(newEncodeError(refusalForValue(value), "the position is out of range"))
+		if !inRange(position.Longitude, -180, 180) {
+			p.note(newEncodeError(refusalForValue(position.Longitude), "longitude must be -180 to 180 degrees"))
+		}
 		position = Position{}
 	}
 	y, x := compressedSteps(position)

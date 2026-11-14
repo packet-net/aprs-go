@@ -4,6 +4,8 @@ package aprs
 type context struct {
 	options     ParseOptions
 	diagnostics []Diagnostic
+	// depth is how many third-party headers enclose the packet being read.
+	depth int
 }
 
 func newContext(options ParseOptions) *context {
@@ -13,7 +15,7 @@ func newContext(options ParseOptions) *context {
 func (c *context) clone() *context {
 	d := make([]Diagnostic, len(c.diagnostics))
 	copy(d, c.diagnostics)
-	return &context{options: c.options, diagnostics: d}
+	return &context{options: c.options, diagnostics: d, depth: c.depth}
 }
 
 func (c *context) push(severity Severity, code Code, message string, offset int) {

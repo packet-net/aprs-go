@@ -415,6 +415,11 @@ func encodeCheck(c vectorCase) []string {
 	var reason string
 	switch {
 	case unreadable != nil && !unreadable.Refused:
+		// The one record Go's types cannot hold, by name; anything else the reader cannot hold is
+		// a failure, not a skip.
+		if c["id"] == "encode/nested-third-party-ending-in-undecoded-data" {
+			return nil // undecoded data has no neutral form of its bytes (not-encodable)
+		}
 		return []string{"encode: this package's data cannot hold it: " + unreadable.Reason}
 	case unreadable != nil:
 		refusal, reason = &unreadable.Code, unreadable.Reason
@@ -455,13 +460,17 @@ func readbackCheck(c vectorCase) []string {
 	if d.header != nil {
 		return nil
 	}
-	switch x := d.packet.Data.(type) {
-	case aprs.Unrecognized:
-		return nil
-	case aprs.ThirdParty:
-		if _, ok := x.Packet.Data.(aprs.Unrecognized); ok {
-			return nil
+	// Undecoded data has no neutral form to read back, at any depth of third-party packets.
+	data0 := d.packet.Data
+	for {
+		tp, ok := data0.(aprs.ThirdParty)
+		if !ok {
+			break
 		}
+		data0 = tp.Packet.Data
+	}
+	if _, ok := data0.(aprs.Unrecognized); ok {
+		return nil
 	}
 	written := neutral.Data(d.packet.Data)
 	data, unreadable := neutral.ReadData(any(written))

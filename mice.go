@@ -478,22 +478,32 @@ func encodeMicE(r *MicEReport) (Address, []byte, *EncodeError) {
 	// Latitude digits into the destination, blanked for ambiguity: rounding then blanking keeps
 	// the box the position is in, and a decoded position (the centre of its box) writes back the
 	// same digits.
-	latUnits := toU64(roundSteps(absFloat(p.Latitude) * 60 * perMinute))
-	latExtra := byte(latUnits % extraBase)
-	latUnits /= extraBase
+	var latUnits uint64
+	var latExtra byte
+	if p.Ambiguity > 0 {
+		// Cut to the box, not rounded and then cut again.
+		latUnits = cutToBox(p.Latitude, p.Ambiguity)
+	} else {
+		latUnits = toU64(roundSteps(absFloat(p.Latitude) * 60 * perMinute))
+		latExtra = byte(latUnits % extraBase)
+		latUnits /= extraBase
+	}
 	// The box, in hundredths of a minute, that each level of ambiguity blanks.
 	boxSize := [...]uint64{1, 10, 100, 1000, 6000}[p.Ambiguity]
 	if p.Ambiguity > 0 && latUnits/boxSize*boxSize+boxSize/2 > 90*6000 {
 		pend.note(newEncodeError(RefusalValueHasNoForm, "an ambiguous latitude whose box is centred past 90 degrees cannot be sent"))
 	}
 	latText := fmt.Sprintf("%02d%02d%02d", latUnits/6000, latUnits%6000/100, latUnits%100)
-	lonUnits := toU64(roundSteps(absFloat(p.Longitude) * 60 * perMinute))
-	lonExtra := byte(lonUnits % extraBase)
-	lonUnits /= extraBase
-	// The longitude digits the ambiguity makes a decoder ignore hold the centre it reports
-	// (vectors README, Mic-E).
+	var lonUnits uint64
+	var lonExtra byte
 	if p.Ambiguity > 0 {
-		lonUnits = lonUnits/boxSize*boxSize + boxSize/2
+		// The longitude digits the ambiguity makes a decoder ignore hold the centre it reports
+		// (vectors README, Mic-E), of the box the longitude is cut to.
+		lonUnits = cutToBox(p.Longitude, p.Ambiguity) + boxSize/2
+	} else {
+		lonUnits = toU64(roundSteps(absFloat(p.Longitude) * 60 * perMinute))
+		lonExtra = byte(lonUnits % extraBase)
+		lonUnits /= extraBase
 	}
 	lonDeg := uint32(lonUnits / 6000)
 	lonMin := uint32(lonUnits % 6000 / 100)
@@ -642,7 +652,7 @@ func encodeMicE(r *MicEReport) (Address, []byte, *EncodeError) {
 	}
 	if r.Locator != nil {
 		b := []byte(*r.Locator)
-		if n, ok := locatorLen(append(append([]byte(nil), b...), '/', 'G')); !ok || n != len(b) {
+		if n, ok := locatorLen(append(append([]byte(nil), b...), '/', 'G')); !ok || n != len(b) || *r.Locator != asciiUpper(*r.Locator) {
 			pend.note(newEncodeError(RefusalMalformed, "a grid locator is 4 or 6 characters, e.g. IO91 or IO91SX"))
 		}
 		out = append(out, b...)
@@ -655,30 +665,52 @@ func encodeMicE(r *MicEReport) (Address, []byte, *EncodeError) {
 		}
 	}
 	beforeExtension := len(out)
-	switch {
-	case f.PHG != nil:
-		var err *EncodeError
-		out, err = phgCodes(out, *f.PHG)
-		pend.run(err)
-		if f.PHG.BeaconsPerHour != nil {
-			if c, ok := beaconRateChar(*f.PHG.BeaconsPerHour); ok {
-				out = append(out, c, '/')
-			} else {
-				pend.note(newEncodeError(RefusalValueOutOfRange, "PHGR beacons per hour is 1-35"))
+	// One of PHG, RNG and DFS is written; any other keeps its own checks.
+	exts := []struct {
+		present bool
+		write   func(out []byte) []byte
+	}{
+		{f.PHG != nil, func(out []byte) []byte {
+			var err *EncodeError
+			out, err = phgCodes(out, *f.PHG)
+			pend.run(err)
+			if f.PHG.BeaconsPerHour != nil {
+				if c, ok := beaconRateChar(*f.PHG.BeaconsPerHour); ok {
+					out = append(out, c, '/')
+				} else {
+					pend.note(newEncodeError(RefusalValueOutOfRange, "PHGR beacons per hour is 1-35"))
+				}
 			}
+			return out
+		}},
+		{f.RangeMiles != nil, func(out []byte) []byte {
+			rng := *f.RangeMiles
+			n := roundSteps(rng)
+			if !inRange(n, 0, 9999) {
+				pend.note(newEncodeError(refusalForValue(rng), "RNG range is 0-9999 miles"))
+			} else {
+				out = append(out, fmt.Sprintf("RNG%04d", toU32(n))...)
+			}
+			return out
+		}},
+		{f.DFS != nil, func(out []byte) []byte {
+			var err *EncodeError
+			out, err = dfsCodes(out, *f.DFS)
+			pend.run(err)
+			return out
+		}},
+	}
+	written := false
+	for _, e := range exts {
+		if !e.present {
+			continue
 		}
-	case f.RangeMiles != nil:
-		rng := *f.RangeMiles
-		n := roundSteps(rng)
-		if !inRange(n, 0, 9999) {
-			pend.note(newEncodeError(refusalForValue(rng), "RNG range is 0-9999 miles"))
+		if written {
+			e.write(nil)
 		} else {
-			out = append(out, fmt.Sprintf("RNG%04d", toU32(n))...)
+			out = e.write(out)
+			written = true
 		}
-	case f.DFS != nil:
-		var err *EncodeError
-		out, err = dfsCodes(out, *f.DFS)
-		pend.run(err)
 	}
 	afterExtension := -1
 	if len(out) > beforeExtension {
