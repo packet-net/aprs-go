@@ -5,6 +5,25 @@
 - `Device` now has a `String` method giving "vendor model" (for example `Yaesu FTM-400DR`), the same as the Python library's `str(packet.device)`. Printing a `Device` used to show the raw struct.
 - The README's Mic-E and device snippet is now a tested example (`Example_micEDevice`); every other README snippet already was.
 - Tests: when the `vectors` submodule is missing in a git clone, the vectors tests now fail with a one-line message to run `git submodule update --init`, instead of skipping and reporting ok. A copy fetched through the module proxy (no `.git`, and the module zip never holds the submodule) still skips, with the same message.
+- Round 4 of the conformance vectors (pinned at 9f3e07d, `round-4`), release 1.2.0 to come. Licence: MIT, as before (the vectors are CC0).
+- An information field over 256 bytes is refused by the encoder and the builders as `too-long`, whatever the output (TNC2, AX.25, KISS); the size is the bytes the data's fields make, UTF-8 and number text included, and a third-party packet's limit is on the outermost field. It is named before any later refusal in the order. A decoded packet whose field is over 256 bytes decodes as before and re-encodes `refused`, `too-long`. The README no longer says the encoder has no size limit.
+- A byte below 0x20 or the byte 0x7F in text (a comment, status text, a message, bulletin or NWS bulletin text, telemetry names, units and project title, capability values, the free text a weather report or an NMEA sentence leaves, a Maidenhead beacon's comment) gives one `control-character-in-text` warning (new code, tolerable), judged after the text's structure and encoding; `aprs.Strict` rejects it. TAB, and a CR or LF inside the text, count. User-defined, raw weather, test and undecoded data, Mic-E fixed bytes and Rev 0 telemetry, object and item names, capability tokens, addressees, headers and NMEA sentences keep their own rules. The encoder and builders refuse such text as `invalid-character` (it was only CR and LF); a Mic-E status text starting with 0x1D is refused instead of being written after a `/`.
+- New code `CodeImplementationLimit` (`implementation-limit`) so the codes match the vectors. This library has no fixed capacity and never gives it.
+- A fixed-width weather field whose digits run on by two or more, followed by the end of the information field or by a defined field still to be read, is `out-of-range-value`: the value is dropped and the fields carry on after the run (`t2147483647r000` has a rain of 0 and no temperature). The dropped value counts as present for `incomplete-weather`. Anything else after the run keeps the 1.1.0 rule.
+- Builder defaults, written down: a builder never reads the clock; an object or positionless weather report with no timestamp is `missing-field`; a position, object, item or Mic-E report with no symbol is `invalid-symbol` (it was `missing-field`); a weather report's symbol is `/_`. The other defaults (not messaging, Mic-E off duty and type code `'`, telemetry bits `00000000`, no path, destination `APZ001`, no ambiguity, no compression) are unchanged.
+- A Mic-E altitude goes in the Mic-E altitude bytes, rounded once to the nearest metre from the value given in either unit (1000 feet is 305 m); outside -10000 to 743570 m it is `value-out-of-range`, not moved to a `/A=`. `MicEBuilder.AltitudeFeet` no longer writes a `/A=`. The encoder, given neutral data, writes a `/A=` only for a whole number of feet within six digits that the Mic-E bytes do not hold exactly (1000 feet is `/A=001000`, -50000 feet is `/A=-50000`), and otherwise the Mic-E bytes (100.5 feet is 31 m); an altitude read from a `/A=` is still written back as one.
+- The dump tool passes only the keys a recipe gives and never fills one in: a telemetry recipe with no sequence is `refused`, `missing-field` (the dump tool used to build it with sequence 0).
+- The README says 1.2 and 33 tolerable defects.
+
+### Breaking changes for callers
+
+- An encoder or builder refuses an information field over 256 bytes (`too-long`).
+- Text with a control character is refused (`invalid-character`), and a decoder gives `control-character-in-text`, so `aprs.Strict` now rejects such packets.
+- A run-on weather value before a defined field or the end of the field is dropped with `out-of-range-value`, where it used to be read at its own width with the rest as text.
+- A position, object, item or Mic-E report built with no symbol is refused as `invalid-symbol` (it was `missing-field`).
+- A Mic-E report's altitude given in feet goes in the Mic-E altitude bytes, rounded to the metre, instead of a `/A=` in the status text.
+- Neutral Mic-E data of -50000 feet is written as `/A=-50000` instead of refused; neutral Mic-E altitudes that are neither whole feet nor whole metres go in the Mic-E bytes (they were a `/A=`).
+- The new `Code` values `CodeControlCharacterInText` and `CodeImplementationLimit` shift the numbers of the codes after the first, so do not store a `Code` as a number.
 
 ## 1.1.0 (2026-11-14)
 

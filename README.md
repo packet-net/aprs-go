@@ -2,10 +2,10 @@
 
 An APRS (Automatic Packet Reporting System) encoder and decoder in Go. It covers every APRS 1.2 data type in [APRS12c](https://github.com/wb2osz/aprsspec), from TNC2 / APRS-IS text lines, AX.25 frames or KISS frames. Standard library only, no cgo, no `unsafe`.
 
-Conforms to [aprs-vectors](https://github.com/packet-net/aprs-vectors) 1.1: every case passes, and it writes the same bytes as the [C#](https://github.com/packet-net/aprs-cs), [Rust](https://github.com/packet-net/aprs-rs), [Python](https://github.com/packet-net/aprs-py), [TypeScript](https://github.com/packet-net/aprs-ts) and [C](https://github.com/packet-net/aprs-c) implementations.
+Conforms to [aprs-vectors](https://github.com/packet-net/aprs-vectors) 1.2: every case passes, and it writes the same bytes as the [C#](https://github.com/packet-net/aprs-cs), [Rust](https://github.com/packet-net/aprs-rs), [Python](https://github.com/packet-net/aprs-py), [TypeScript](https://github.com/packet-net/aprs-ts) and [C](https://github.com/packet-net/aprs-c) implementations.
 
 - **Decoding never fails because of the information field.** Every deviation from the spec becomes a `Diagnostic` with a stable `Code`, and the rest of the packet is still read where it can be.
-- **Strict or lenient, one defect at a time.** `ParseOptions` says which of the 32 tolerable defects to accept. `aprs.Lenient` (the zero value) accepts them all, each with a warning; `aprs.Strict` accepts none; any single one can be switched off.
+- **Strict or lenient, one defect at a time.** `ParseOptions` says which of the 33 tolerable defects to accept. `aprs.Lenient` (the zero value) accepts them all, each with a warning; `aprs.Strict` accepts none; any single one can be switched off.
 - **The encoder writes only what the spec allows.** It checks what it wrote by decoding it again: a comment that would read back as something else, such as an altitude or a `!DAO!`, is escaped or refused, never silently changed.
 
 ## Install
@@ -92,7 +92,7 @@ weather, err := me.Weather().At(51.45, -0.98).WindDirectionDegrees(220).WindSpee
 
 A setter has the name of the field it fills (`CourseDegrees`, `AltitudeFeet`), and one that converts changes only the unit (`AltitudeM`, `SpeedKmh`, `TemperatureC`, `Rain1hMm`). A value between the steps a field holds is rounded once, by the encoder, halves away from zero. A course of 0 is the spec's unknown course, and north is 360.
 
-`Station` also starts items, Mic-E reports, acks and rejects, bulletins, status reports, telemetry and its `PARM.`/`UNIT.`/`EQNS.`/`BITS.` metadata. The destination is `APZ001`, from the experimental range, until you set your own tocall with `To`. The package has no clock, so an object or a positionless weather report needs its timestamp given.
+`Station` also starts items, Mic-E reports, acks and rejects, bulletins, status reports, telemetry and its `PARM.`/`UNIT.`/`EQNS.`/`BITS.` metadata. The destination is `APZ001`, from the experimental range, until you set your own tocall with `To`. The package has no clock, so an object or a positionless weather report needs its timestamp given, and a builder never reads the time: leave one out and it is refused as `missing-field`. A position, object, item or Mic-E report needs a symbol (`invalid-symbol` without one); a weather report is `/_`. Left unsaid, a report is not messaging-capable (`!`, `/`, or the Mic-E `'` type code), a Mic-E report is off duty, a telemetry report's bits are `00000000`, and there is no path, no ambiguity and no compression. A Mic-E report's altitude, given in feet or metres, goes in the Mic-E altitude bytes, rounded to the nearest metre (1000 feet is 305 m), and one outside -10000 to 743570 m is `value-out-of-range`.
 
 ## Encoding by hand
 
@@ -102,6 +102,8 @@ Fill in the types, then make a packet with `NewPacket`, or just the information 
 info, err := aprs.Encode(aprs.Message{Addressee: "G3NRW", Text: "Hi Ian", MessageID: aprs.Ptr("01"), ReplyAck: aprs.Ptr("")})
 // :G3NRW    :Hi Ian{01}
 ```
+
+An information field is at most 256 bytes (APRS12c ch. 3): an encoder or builder refuses data that would make a longer one, whatever the output (TNC2, AX.25 or KISS), as `too-long`; text counts as its UTF-8 bytes, and a third-party packet's limit is on the outer field. Text with a control character in it (a byte below 0x20, TAB, CR and LF inside the text included, or 0x7F) is refused as `invalid-character`. A decoder sets no limit on the field, and gives one `control-character-in-text` warning for text that holds a control character, so `aprs.Strict` rejects it.
 
 What the spec does not allow is refused with an `*EncodeError`. Its `Code()` says why, from the same 26 reasons the other implementations use (the `refusals` list in the vectors' `codes.json`); the message is for people and may change.
 
