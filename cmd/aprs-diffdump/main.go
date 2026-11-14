@@ -511,6 +511,8 @@ func buildRecordFinite(input map[string]any) map[string]any {
 			return map[string]any{"n": n, "result": "unsupported", "reason": e.reason}
 		case *aprs.EncodeError:
 			return map[string]any{"n": n, "result": "refused", "reason": e.Error(), "refusal": e.Code().ID()}
+		case *missingField:
+			return map[string]any{"n": n, "result": "refused", "reason": e.reason, "refusal": aprs.RefusalMissingField.ID()}
 		case *aprs.InvalidAddressError:
 			return map[string]any{"n": n, "result": "refused", "reason": e.Error(), "refusal": aprs.RefusalInvalidAddress.ID()}
 		}

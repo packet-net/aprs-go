@@ -17,6 +17,12 @@ type notSupported struct{ reason string }
 
 func (e *notSupported) Error() string { return e.reason }
 
+// missingField says a recipe left out something the report needs, which the builder takes as an
+// argument and so has no default for.
+type missingField struct{ reason string }
+
+func (e *missingField) Error() string { return e.reason }
+
 func unsupported(format string, a ...any) error {
 	return &notSupported{reason: fmt.Sprintf(format, a...)}
 }
@@ -535,10 +541,14 @@ func build(input map[string]any) (*aprs.Packet, error) {
 		if err != nil {
 			return nil, err
 		}
+		// The builder takes the sequence as an argument, so a recipe without one is built with
+		// 0 to see what else is wrong, and refused as missing-field after any code ranked
+		// before it.
 		var seq uint16
 		if sequence != nil {
 			seq = uint16(*sequence)
 		}
+		missingSequence := sequence == nil
 		b := station.Telemetry(seq)
 		if v := args.get("analog"); v != nil {
 			list, ok := v.([]any)
@@ -579,7 +589,14 @@ func build(input map[string]any) (*aprs.Packet, error) {
 		if err := args.allTaken(); err != nil {
 			return nil, err
 		}
-		return b.Build()
+		p, err := b.Build()
+		if missingSequence {
+			if e, ok := err.(*aprs.EncodeError); ok && refusalRank(e.Code().ID()) < refusalRank("missing-field") {
+				return nil, err
+			}
+			return nil, &missingField{reason: "a telemetry report has a sequence number (APRS12c ch. 13)"}
+		}
+		return p, err
 	case "telemetry-names", "telemetry-units":
 		addressee, err := args.text("addressee")
 		if err != nil {
