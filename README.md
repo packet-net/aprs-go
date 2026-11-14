@@ -137,4 +137,4 @@ Every snippet here is a runnable example in `example_test.go`.
 
 ## Licence
 
-AGPL-3.0-or-later ([`LICENSE`](LICENSE)). It includes data from the APRS device identification database, CC BY-SA 2.0; see [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+MIT ([`LICENSE`](LICENSE)). It includes data from the APRS device identification database, CC BY-SA 2.0; see [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
