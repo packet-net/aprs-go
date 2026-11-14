@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // A recipe giving a quantity in two units is refused, ranked among the checks on each value and
 // value-given-twice, and never built from one unit.
@@ -20,5 +23,13 @@ func TestTwoUnitRecipeIsRanked(t *testing.T) {
 	}
 	if r := buildRecord(recipe(map[string]any{"altitude_feet": 1.0, "altitude_m": 1.0e9})); r["result"] != "refused" || r["refusal"] != "value-out-of-range" {
 		t.Errorf("a second pair: %v", r)
+	}
+}
+
+func TestNonFiniteAmbiguityRanksAsNotANumber(t *testing.T) {
+	args := map[string]any{"latitude": 49.5, "longitude": -72.5, "symbol": "/>", "ambiguity": math.NaN(), "altitude_feet": 1.0, "altitude_m": 1.0}
+	r := buildRecord(map[string]any{"n": int64(1), "station": map[string]any{"source": "N0CALL"}, "report": "position", "args": args})
+	if r["refusal"] != "not-a-number" {
+		t.Errorf("%v", r)
 	}
 }

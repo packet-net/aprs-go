@@ -567,3 +567,15 @@ func TestNonFiniteSpeedIsNotANumber(t *testing.T) {
 		eq(t, err.(*aprs.EncodeError).Code(), aprs.RefusalNotANumber)
 	}
 }
+
+// A number that is not one is named before the faults that rank after it: an NMEA field beside a
+// bad sentence or a comment with a line break, and a compressed longitude beside a latitude out of
+// range.
+func TestNotANumberOutranksLaterCodes(t *testing.T) {
+	_, err := aprs.Encode(aprs.NMEA{Sentence: "GPRMC,1*4G", CourseDegrees: aprs.Ptr(math.NaN())})
+	eq(t, err.(*aprs.EncodeError).Code(), aprs.RefusalNotANumber)
+	_, err = aprs.Encode(aprs.NMEA{Sentence: "GPRMC,063909,A*00", Longitude: aprs.Ptr(math.Inf(1)), Comment: "a\rb"})
+	eq(t, err.(*aprs.EncodeError).Code(), aprs.RefusalNotANumber)
+	_, err = aprs.Encode(aprs.PositionReport{Fields: aprs.Positioned{Position: aprs.Position{Latitude: 90.0001, Longitude: math.NaN()}, Symbol: aprs.SymbolCar, Compressed: true}})
+	eq(t, err.(*aprs.EncodeError).Code(), aprs.RefusalNotANumber)
+}

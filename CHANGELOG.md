@@ -24,8 +24,9 @@ Round 3 of the conformance vectors (pinned at 10d4e25).
 - A reply-ack that is wrong on its own is `invalid-message-id` even with no message ID.
 - Builders refuse in the encoder's order: out of range comes before the ambiguity edge's `value-has-no-form`, and the telemetry builder passes extra analog values to the encoder.
 - A compressed GGA weather report with an altitude of 1 foot or less is written, the nearest cs value alone, and reads back rounded, as for any altitude its cs bytes cannot hold exactly.
+- An NMEA field or a compressed coordinate that is not a number is `not-a-number`, named before an invalid sentence, a comment with a line break, or the other coordinate being out of range.
 - A speed, course or other whole-number field given as NaN or an infinity is `not-a-number`, not `value-out-of-range`.
-- The dump tool reads the `NaN`, `Infinity` and `-Infinity` tokens the generator writes, and ranks a recipe that gives a quantity in two units: it builds once with each unit and reports the first code among those results and `value-given-twice`, never `unsupported`.
+- The dump tool reads the `NaN`, `Infinity` and `-Infinity` tokens the generator writes, and ranks a recipe that gives a quantity in two units: it builds once with each unit and reports the first code among those results and `value-given-twice`, never `unsupported`. A recipe ambiguity that is not a finite number is ranked as `not-a-number`.
 - The dump tool's reader names undecoded inner data in a third-party packet before a header fault, and reads an absent positioned symbol as an empty one (`invalid-symbol`).
 
 ## 1.0.1 (2026-11-13)

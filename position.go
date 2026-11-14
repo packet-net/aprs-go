@@ -392,11 +392,13 @@ func encodeCompressed(out []byte, position Position, symbol Symbol, p *pending) 
 		p.note(newEncodeError(RefusalFieldNotAllowed, "a compressed position cannot be ambiguous"))
 	}
 	if !inRange(position.Latitude, -90, 90) || !inRange(position.Longitude, -180, 180) {
-		value := position.Latitude
-		if inRange(position.Latitude, -90, 90) {
-			value = position.Longitude
+		// Each coordinate is judged on its own, so a NaN longitude outranks a latitude out of range.
+		if !inRange(position.Latitude, -90, 90) {
+			p.note(newEncodeError(refusalForValue(position.Latitude), "latitude must be -90 to 90 degrees"))
 		}
-		p.note(newEncodeError(refusalForValue(value), "the position is out of range"))
+		if !inRange(position.Longitude, -180, 180) {
+			p.note(newEncodeError(refusalForValue(position.Longitude), "longitude must be -180 to 180 degrees"))
+		}
 		position = Position{}
 	}
 	y, x := compressedSteps(position)

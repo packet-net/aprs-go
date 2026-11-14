@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"runtime"
 	"sync"
@@ -467,7 +468,36 @@ func twoUnitRecord(input map[string]any, args map[string]any) (map[string]any, b
 	return map[string]any{"n": input["n"], "result": "refused", "reason": reason, "refusal": best}, true
 }
 
+// buildRecord builds a recipe. An ambiguity that is not a finite number is not-a-number at its
+// place in the order: it is left out of the build and ranked with whatever else the recipe refuses.
 func buildRecord(input map[string]any) map[string]any {
+	args, ok := input["args"].(map[string]any)
+	if !ok {
+		return buildRecordFinite(input)
+	}
+	v, ok := args["ambiguity"].(float64)
+	if !ok || (!math.IsNaN(v) && !math.IsInf(v, 0)) {
+		return buildRecordFinite(input)
+	}
+	rest := make(map[string]any, len(args))
+	for k, x := range args {
+		if k != "ambiguity" {
+			rest[k] = x
+		}
+	}
+	copied := make(map[string]any, len(input))
+	for k, x := range input {
+		copied[k] = x
+	}
+	copied["args"] = rest
+	r := buildRecordFinite(copied)
+	if code, _ := r["refusal"].(string); r["result"] == "refused" && refusalRank(code) < refusalRank("not-a-number") {
+		return r
+	}
+	return map[string]any{"n": input["n"], "result": "refused", "reason": "ambiguity is not a number", "refusal": "not-a-number"}
+}
+
+func buildRecordFinite(input map[string]any) map[string]any {
 	n := input["n"]
 	if args, ok := input["args"].(map[string]any); ok {
 		if r, two := twoUnitRecord(input, args); two {

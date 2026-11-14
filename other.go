@@ -741,6 +741,12 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 func encodeNMEA(n *NMEA) ([]byte, *EncodeError) {
 	p := &pending{}
 	sentence := []byte(n.Sentence)
+	// A number that is not one is named before anything else about the sentence.
+	for _, v := range []*float64{n.Latitude, n.Longitude, n.CourseDegrees, n.SpeedKnots, n.AltitudeM} {
+		if v != nil && !isFinite(*v) {
+			p.note(newEncodeError(RefusalNotANumber, "an NMEA field is not a number"))
+		}
+	}
 	if hasLineBreak([]byte(n.Comment)) {
 		p.note(newEncodeError(RefusalInvalidCharacter, "an NMEA comment cannot contain a line break"))
 	}
