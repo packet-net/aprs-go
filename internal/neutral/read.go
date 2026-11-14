@@ -166,7 +166,7 @@ var refusalOrder = []string{
 	"invalid-addressee", "invalid-name", "invalid-timestamp", "not-a-number", "value-out-of-range", "value-has-no-form",
 	"invalid-code", "invalid-symbol", "invalid-character", "too-long", "padding-space", "malformed", "invalid-message-id",
 	"invalid-nmea", "extension-conflict", "field-not-allowed", "symbol-mismatch", "missing-field", "value-given-twice",
-	"text-reads-as-field", "does-not-read-back",
+	"text-reads-as-field", "does-not-read-back", "information-field-too-long",
 }
 
 // RefusalRank is a code's place in the Refusal reasons order.
@@ -180,8 +180,8 @@ func RefusalRank(id string) int {
 }
 
 // Settle gives the refusal of data read with stand-ins: the pending refusal (from ReadDataStandIn),
-// unless the encoder's own refusal (nil when it wrote) comes earlier in the order. A size
-// too-long is last: it counts only when no other code applies, so pending wins over it.
+// unless the encoder's own refusal (nil when it wrote) comes earlier in the order. The size
+// refusal, information-field-too-long, is last in the order, so pending wins over it.
 func Settle(pending *Unreadable, encoder *aprs.RefusalCode, encoderReason string) (aprs.RefusalCode, string, bool) {
 	if pending == nil {
 		if encoder == nil {
@@ -189,13 +189,11 @@ func Settle(pending *Unreadable, encoder *aprs.RefusalCode, encoderReason string
 		}
 		return *encoder, encoderReason, false
 	}
-	if encoder != nil && RefusalRank(encoder.ID()) < RefusalRank(pending.Code.ID()) && !(encoder.ID() == "too-long" && isSize(encoderReason)) {
+	if encoder != nil && RefusalRank(encoder.ID()) < RefusalRank(pending.Code.ID()) {
 		return *encoder, encoderReason, false
 	}
 	return pending.Code, pending.Reason, pending.Tool
 }
-
-func isSize(reason string) bool { return strings.Contains(reason, "information field is at most 256") }
 
 // keys is an object's keys, checked against the ones this package's data can hold, with getters
 // that name the key when a value will not fit.

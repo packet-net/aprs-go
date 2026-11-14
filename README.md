@@ -103,7 +103,7 @@ info, err := aprs.Encode(aprs.Message{Addressee: "G3NRW", Text: "Hi Ian", Messag
 // :G3NRW    :Hi Ian{01}
 ```
 
-An information field is at most 256 bytes (APRS12c ch. 3): an encoder or builder refuses data that would make a longer one, whatever the output (TNC2, AX.25 or KISS), as `too-long`, judged last on the bytes actually written, so data any other rule refuses gets that rule's code; text counts as its UTF-8 bytes, and a third-party packet's limit is on the outer field. Text with a control character in it (a byte below 0x20, TAB, CR and LF inside the text included, or 0x7F) is refused as `invalid-character`. A decoder sets no limit on the field, and gives one `control-character-in-text` warning for text that holds a control character, so `aprs.Strict` rejects it.
+An information field is at most 256 bytes (APRS12c ch. 3): an encoder or builder refuses data that would make a longer one as `information-field-too-long` (a field over its own limit, such as message text over 67 characters, stays `too-long`), judged last on the bytes actually written, so data any other rule refuses gets that rule's code; text counts as its UTF-8 bytes, and a third-party packet's limit is on the outer field. `Packet.TNC2`, `AX25` and `KISS` write out a packet the program already holds (a decoded one, say): they are not encoders, and write its information field as it stands, with no size check. Text with a control character in it (a byte below 0x20, TAB, CR and LF inside the text included, or 0x7F) is refused as `invalid-character`. A decoder sets no limit on the field, and gives one `control-character-in-text` warning for text that holds a control character, so `aprs.Strict` rejects it.
 
 What the spec does not allow is refused with an `*EncodeError`. Its `Code()` says why, from the same 26 reasons the other implementations use (the `refusals` list in the vectors' `codes.json`); the message is for people and may change.
 
@@ -140,4 +140,4 @@ Every snippet here is a runnable example in `example_test.go`.
 
 ## Licence
 
-MIT ([`LICENSE`](LICENSE)). It includes data from the APRS device identification database, CC BY-SA 2.0; see [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+MIT ([`LICENSE`](LICENSE)) from version 1.2.0; versions up to 1.1.0 were published under AGPL-3.0-or-later. The conformance vectors are CC0. It includes data from the APRS device identification database, CC BY-SA 2.0; see [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).

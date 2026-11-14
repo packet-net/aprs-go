@@ -6,7 +6,6 @@ package recipe
 
 import (
 	"math"
-	"strings"
 
 	aprs "github.com/packet-net/aprs-go"
 	"github.com/packet-net/aprs-go/internal/neutral"
@@ -30,16 +29,6 @@ var unitPairs = [][2]string{
 	{"rain_1h_in", "rain_1h_mm"}, {"rain_24h_in", "rain_24h_mm"}, {"rain_midnight_in", "rain_midnight_mm"},
 }
 
-// refusalRank is a code's place in the Refusal reasons order. A refusal only for the information
-// field's 256 bytes is last: the size is judged after every other check, value-given-twice
-// included (the vectors README, Refusal reasons and One quantity, one value).
-func refusalRank(id, reason string) int {
-	if id == "too-long" && strings.Contains(reason, "an information field is at most 256 bytes") {
-		return neutral.RefusalRank("") + 1
-	}
-	return neutral.RefusalRank(id)
-}
-
 // twoUnit builds a recipe that gives a quantity in two units once with each unit (every value is
 // checked on its own) and reports the first code in the order among those refusals and
 // value-given-twice. It never builds from one unit and never gives unsupported.
@@ -56,7 +45,7 @@ func twoUnit(input map[string]any, args map[string]any) (Outcome, bool) {
 		return Outcome{}, false
 	}
 	best, reason := "value-given-twice", "a quantity given in two units"
-	bestRank := refusalRank(best, reason)
+	bestRank := neutral.RefusalRank(best)
 	for side := 0; side < 2; side++ {
 		a := make(map[string]any, len(args))
 		for k, v := range args {
@@ -71,16 +60,17 @@ func twoUnit(input map[string]any, args map[string]any) (Outcome, bool) {
 		}
 		copied["args"] = a
 		if _, err := build(copied); err != nil {
-			if e, ok := err.(*aprs.EncodeError); ok && refusalRank(e.Code().ID(), e.Error()) < bestRank {
+			if e, ok := err.(*aprs.EncodeError); ok && neutral.RefusalRank(e.Code().ID()) < bestRank {
 				best, reason = e.Code().ID(), e.Error()
-				bestRank = refusalRank(best, reason)
-			} else if ia, ok := err.(*aprs.InvalidAddressError); ok && refusalRank("invalid-address", "") < bestRank {
+				bestRank = neutral.RefusalRank(best)
+			} else if ia, ok := err.(*aprs.InvalidAddressError); ok && neutral.RefusalRank("invalid-address") < bestRank {
 				best, reason = "invalid-address", ia.Error()
-				bestRank = refusalRank(best, reason)
+				bestRank = neutral.RefusalRank(best)
 			}
 		}
 	}
-	return Outcome{Refusal: best, Reason: reason}, true
+	// value-given-twice is the tool's own refusal (the builder takes one unit at a time).
+	return Outcome{Refusal: best, Reason: reason, Tool: best == "value-given-twice"}, true
 }
 
 // standIn is an input of a recipe the builder cannot take, whose value alone decides a refusal
@@ -135,7 +125,7 @@ func Build(input map[string]any) Outcome {
 		}
 	}
 	r := buildFinite(copied)
-	if r.Refusal != "" && refusalRank(r.Refusal, r.Reason) < neutral.RefusalRank(first.code) {
+	if r.Refusal != "" && neutral.RefusalRank(r.Refusal) < neutral.RefusalRank(first.code) {
 		return r
 	}
 	return Outcome{Refusal: first.code, Reason: first.reason, Tool: true}
@@ -182,7 +172,7 @@ func buildFinite(input map[string]any) Outcome {
 		case *aprs.EncodeError:
 			return Outcome{Refusal: e.Code().ID(), Reason: e.Error()}
 		case *missingField:
-			return Outcome{Refusal: aprs.RefusalMissingField.ID(), Reason: e.reason}
+			return Outcome{Refusal: aprs.RefusalMissingField.ID(), Reason: e.reason, Tool: true}
 		case *aprs.InvalidAddressError:
 			return Outcome{Refusal: aprs.RefusalInvalidAddress.ID(), Reason: e.Error()}
 		}

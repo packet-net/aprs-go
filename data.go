@@ -274,8 +274,8 @@ type DFBearing struct {
 	Quality uint8
 }
 
-// Storm is a storm or hurricane report in an object (APRS12c ch. 12). Each value is nil when
-// sent as unknown.
+// Storm is a storm or hurricane report in an object (APRS12c ch. 12). Its fields are digits: all but
+// WholeGaleRadiusNM are required, and an encoder refuses storm data missing one (missing-field).
 type Storm struct {
 	// Kind is what it is: tropical storm, hurricane or tropical depression.
 	Kind StormKind

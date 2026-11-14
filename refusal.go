@@ -27,7 +27,8 @@ const (
 	RefusalInvalidMessageID
 	// RefusalPaddingSpace: text starts or ends with a space that would be read back as padding.
 	RefusalPaddingSpace
-	// RefusalTooLong: free text or a list is longer than its field allows.
+	// RefusalTooLong: free text or a list is longer than its own field allows. The information
+	// field's 256 bytes as a whole are RefusalInformationFieldTooLong.
 	RefusalTooLong
 	// RefusalMalformed: text in a fixed-form field is not that form (a locator, a bit sense, a
 	// capability token).
@@ -66,6 +67,9 @@ const (
 	// RefusalDoesNotReadBack: fallback: the library's own read-back check found the bytes decode
 	// to different data and no rule names why.
 	RefusalDoesNotReadBack
+	// RefusalInformationFieldTooLong: the information field as written is over 256 bytes
+	// (APRS12c ch. 3) and nothing else is wrong with the data: checked last, on the bytes written.
+	RefusalInformationFieldTooLong
 )
 
 var refusalIDs = [...]string{
@@ -74,7 +78,7 @@ var refusalIDs = [...]string{
 	"invalid-character", "text-reads-as-field", "not-a-number", "value-out-of-range", "value-has-no-form",
 	"value-given-twice", "invalid-timestamp", "missing-field", "invalid-symbol", "symbol-mismatch",
 	"extension-conflict", "field-not-allowed", "invalid-code", "invalid-nmea", "not-encodable",
-	"does-not-read-back",
+	"does-not-read-back", "information-field-too-long",
 }
 
 // AllRefusalCodes gives every refusal code, in the order of the vectors' refusals list.
@@ -127,6 +131,7 @@ var refusalOrder = [...]RefusalCode{
 	RefusalInvalidCharacter, RefusalTooLong, RefusalPaddingSpace, RefusalMalformed, RefusalInvalidMessageID,
 	RefusalInvalidNMEA, RefusalExtensionConflict, RefusalFieldNotAllowed, RefusalSymbolMismatch,
 	RefusalMissingField, RefusalValueGivenTwice, RefusalTextReadsAsField, RefusalDoesNotReadBack,
+	RefusalInformationFieldTooLong,
 }
 
 func (c RefusalCode) rank() int {

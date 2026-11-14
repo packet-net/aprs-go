@@ -350,8 +350,17 @@ func (b PositionBuilder) Timestamp(t Timestamp) PositionBuilder {
 	return b
 }
 
-// Data gives the data, without a header.
+// Data gives the data, without a header. Data the builder was not given everything for (a
+// symbol, or an object's or positionless weather report's timestamp) is refused as Build refuses it.
 func (b PositionBuilder) Data() (Data, error) {
+	d, err := b.data()
+	if err != nil {
+		return nil, err
+	}
+	return refuseMissing(d, b.common.symbol == nil)
+}
+
+func (b PositionBuilder) data() (Data, error) {
 	fields, err := b.common.positioned("a position report", false)
 	if err != nil {
 		return nil, err
@@ -360,7 +369,7 @@ func (b PositionBuilder) Data() (Data, error) {
 }
 
 // Build gives the packet: the station's header and this report, encoded.
-func (b PositionBuilder) Build() (*Packet, error) { return build(b.station, b.Data) }
+func (b PositionBuilder) Build() (*Packet, error) { return build(b.station, b.data) }
 
 // ObjectBuilder builds an object, from Station.Object (APRS12c ch. 11).
 type ObjectBuilder struct {
@@ -390,8 +399,17 @@ func (b ObjectBuilder) Killed() ObjectBuilder {
 	return b
 }
 
-// Data gives the data, without a header.
+// Data gives the data, without a header. Data the builder was not given everything for (a
+// symbol, or an object's or positionless weather report's timestamp) is refused as Build refuses it.
 func (b ObjectBuilder) Data() (Data, error) {
+	d, err := b.data()
+	if err != nil {
+		return nil, err
+	}
+	return refuseMissing(d, b.common.symbol == nil || b.timestamp == nil)
+}
+
+func (b ObjectBuilder) data() (Data, error) {
 	fields, err := b.common.positioned("an object", false)
 	if err != nil {
 		return nil, err
@@ -406,7 +424,7 @@ func (b ObjectBuilder) Data() (Data, error) {
 }
 
 // Build gives the packet: the station's header and this object, encoded.
-func (b ObjectBuilder) Build() (*Packet, error) { return build(b.station, b.Data) }
+func (b ObjectBuilder) Build() (*Packet, error) { return build(b.station, b.data) }
 
 // ItemBuilder builds an item, from Station.Item (APRS12c ch. 11).
 type ItemBuilder struct {
@@ -422,8 +440,17 @@ func (b ItemBuilder) Killed() ItemBuilder {
 	return b
 }
 
-// Data gives the data, without a header.
+// Data gives the data, without a header. Data the builder was not given everything for (a
+// symbol, or an object's or positionless weather report's timestamp) is refused as Build refuses it.
 func (b ItemBuilder) Data() (Data, error) {
+	d, err := b.data()
+	if err != nil {
+		return nil, err
+	}
+	return refuseMissing(d, b.common.symbol == nil)
+}
+
+func (b ItemBuilder) data() (Data, error) {
 	fields, err := b.common.positioned("an item", false)
 	if err != nil {
 		return nil, err
@@ -432,7 +459,7 @@ func (b ItemBuilder) Data() (Data, error) {
 }
 
 // Build gives the packet: the station's header and this item, encoded.
-func (b ItemBuilder) Build() (*Packet, error) { return build(b.station, b.Data) }
+func (b ItemBuilder) Build() (*Packet, error) { return build(b.station, b.data) }
 
 // MicEBuilder builds a Mic-E position report, from Station.MicE (APRS12c ch. 10). The position
 // comment is MicEOffDuty unless set; MicEEmergency sets off alarms, so is only sent when asked
@@ -457,8 +484,17 @@ func (b MicEBuilder) Messaging() MicEBuilder {
 	return b
 }
 
-// Data gives the data, without a header.
+// Data gives the data, without a header. Data the builder was not given everything for (a
+// symbol, or an object's or positionless weather report's timestamp) is refused as Build refuses it.
 func (b MicEBuilder) Data() (Data, error) {
+	d, err := b.data()
+	if err != nil {
+		return nil, err
+	}
+	return refuseMissing(d, b.common.symbol == nil)
+}
+
+func (b MicEBuilder) data() (Data, error) {
 	fields, err := b.common.positioned("a Mic-E report", true)
 	if err != nil {
 		return nil, err
@@ -494,7 +530,7 @@ func (b MicEBuilder) Data() (Data, error) {
 // Build gives the packet: the station's source and path, the destination this report computes,
 // and the report. An altitude, in either unit, goes in the Mic-E altitude bytes, rounded to the
 // nearest metre.
-func (b MicEBuilder) Build() (*Packet, error) { return build(b.station, b.Data) }
+func (b MicEBuilder) Build() (*Packet, error) { return build(b.station, b.data) }
 
 // WeatherBuilder builds a weather report, from Station.Weather (APRS12c ch. 12). With a position
 // it is a position report with the weather station symbol; without, a positionless weather
@@ -647,9 +683,17 @@ func (b WeatherBuilder) Observations(weather Weather) WeatherBuilder {
 	return b
 }
 
-// Data gives the data, without a header: a position report with a position, otherwise a
-// positionless report.
+// Data gives the data, without a header. Data the builder was not given everything for (a
+// symbol, or an object's or positionless weather report's timestamp) is refused as Build refuses it.
 func (b WeatherBuilder) Data() (Data, error) {
+	d, err := b.data()
+	if err != nil {
+		return nil, err
+	}
+	return refuseMissing(d, b.position == nil && b.timestamp == nil)
+}
+
+func (b WeatherBuilder) data() (Data, error) {
 	weather := b.weather
 	if b.position != nil {
 		fields := Positioned{Position: *b.position, Symbol: b.symbol, Compressed: b.compressed, DAO: b.dao, Weather: &weather}
@@ -668,7 +712,7 @@ func (b WeatherBuilder) Data() (Data, error) {
 }
 
 // Build gives the packet: the station's header and this report, encoded.
-func (b WeatherBuilder) Build() (*Packet, error) { return build(b.station, b.Data) }
+func (b WeatherBuilder) Build() (*Packet, error) { return build(b.station, b.data) }
 
 // MessageBuilder builds a message to another station, from Station.Message (APRS12c ch. 14).
 type MessageBuilder struct {
@@ -811,6 +855,26 @@ func (b TelemetryBuilder) Data() (Data, error) {
 
 // Build gives the packet: the station's header and this report, encoded.
 func (b TelemetryBuilder) Build() (*Packet, error) { return build(b.station, b.Data) }
+
+// refuseMissing is what Data does for data the builder was not given everything for (no symbol,
+// no timestamp): it names the refusal the encoder gives it, at its place in the order, so Data
+// refuses what Build refuses. Build itself uses the unchecked data, so the header's faults and
+// these rank together in the packet's own check.
+func refuseMissing(d Data, missing bool) (Data, error) {
+	if !missing {
+		return d, nil
+	}
+	if m, ok := d.(MicEReport); ok {
+		if _, _, err := encodeMicE(&m); err != nil {
+			return nil, err
+		}
+		return d, nil
+	}
+	if _, err := encode(d); err != nil {
+		return nil, err
+	}
+	return d, nil
+}
 
 func build(s Station, data func() (Data, error)) (*Packet, error) {
 	d, err := data()

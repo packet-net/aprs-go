@@ -96,7 +96,7 @@ func decodeComment(ctx *context, fields *Positioned, bytes *cs, b []byte, offset
 			// The wind is decided here, where the extension belongs, before any field is read
 			// (vectors README, "The order of checks"): sent as c and s fields in its place, or
 			// missing. After a compressed position the cs bytes say it is unknown, not missing.
-			probe, ok := weatherFields(newContext(Lenient), b, offset, &Weather{}, windAsFields)
+			probe, ok := weatherFields(newContext(Lenient), b[:weatherEnd(b)], offset, &Weather{}, windAsFields)
 			// The wind comes as fields once a c field is read (an s is only the speed after one).
 			direction, speed := false, false
 			if ok {
@@ -115,7 +115,7 @@ func decodeComment(ctx *context, fields *Positioned, bytes *cs, b []byte, offset
 			}
 			wind = windAsFields
 		}
-		run, ok := weatherFields(ctx, b[at:], offset+at, &weather, wind)
+		run, ok := weatherFields(ctx, b[at:weatherEnd(b)], offset+at, &weather, wind)
 		if !ok {
 			return false
 		}
@@ -138,6 +138,22 @@ func decodeComment(ctx *context, fields *Positioned, bytes *cs, b []byte, offset
 		at = n
 	}
 	return commentTail(ctx, fields, b[at:], offset+at, -1)
+}
+
+// weatherEnd gives where the weather text of a positioned report ends in b: the start of the
+// base-91 telemetry or !DAO! that trails it (lifted first, and so not part of the weather's
+// text), else the end of b. A run-on value before it counts as ending at the field's end.
+func weatherEnd(b []byte) int {
+	end := len(b)
+	spans := telemetryAndDAOSpans(b)
+	// The spans are last first: walk back from the end while each one is the last bytes left.
+	for _, sp := range spans {
+		if sp.end != end {
+			break
+		}
+		end = sp.start
+	}
+	return end
 }
 
 // weatherTail reads what follows a position's weather data: base-91 telemetry and a !DAO! are
@@ -545,22 +561,14 @@ func storm(b []byte) (Storm, int, bool) {
 	default:
 		return Storm{}, 0, false
 	}
-	// field gives the value (nil when unknown) and whether there is such a field.
+	// field gives the value and whether there is such a field: its marker and then digits (a field
+	// of dots or spaces is not storm data, unlike a weather value).
 	field := func(at int, marker byte, width int) (*uint16, bool) {
 		f, ok := get(b, at, at+1+width)
-		if !ok || f[0] != marker {
+		if !ok || f[0] != marker || !allDigits(f[1:]) {
 			return nil, false
 		}
-		v := f[1:]
-		if allDigits(v) {
-			return Ptr(uint16(digits(v))), true
-		}
-		for _, x := range v {
-			if x != '.' && x != ' ' {
-				return nil, false
-			}
-		}
-		return nil, true
+		return Ptr(uint16(digits(f[1:]))), true
 	}
 	s := Storm{Kind: kind}
 	var ok bool

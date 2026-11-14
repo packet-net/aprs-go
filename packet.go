@@ -432,7 +432,7 @@ func newPacket(source, destination Address, path []PathEntry, data Data) (*Packe
 			if pend.run(err) {
 				destination, information = d, info
 				if len(info) > maxInformationField {
-					pend.note(newEncodeError(RefusalTooLong, fmt.Sprintf("an information field is at most 256 bytes (APRS12c ch. 3), and this one is %d", len(info))))
+					pend.note(newEncodeError(RefusalInformationFieldTooLong, fmt.Sprintf("an information field is at most 256 bytes (APRS12c ch. 3), and this one is %d", len(info))))
 				}
 			}
 		}
@@ -491,7 +491,8 @@ func (p *Packet) QConstruct() (QConstruct, bool) {
 }
 
 // TNC2 gives the packet as a TNC2 text line (without a line ending). The last used path entry is
-// marked *.
+// marked *. It writes the packet's information field as it stands, whatever its length: it is not
+// an encoder, so the 256-byte limit does not apply to it (see Encode).
 func (p *Packet) TNC2() []byte {
 	out := make([]byte, 0, 32+len(p.Information))
 	out = append(out, p.Source.text...)
@@ -521,6 +522,8 @@ func (p *Packet) String() string {
 
 // AX25 gives the packet as an AX.25 UI frame in KISS form (no flags, no FCS). It fails, with an
 // *EncodeError, if an address cannot be sent over the air, or the path is longer than 8 entries.
+// It writes the information field as it stands, whatever its length: it is not an encoder, so the
+// 256-byte limit does not apply to it (see Encode).
 func (p *Packet) AX25() ([]byte, error) {
 	out, err := p.ax25()
 	if err != nil {

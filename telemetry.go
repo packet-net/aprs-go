@@ -98,6 +98,8 @@ func encodeTelemetry(t *Telemetry) ([]byte, *EncodeError) {
 		p.note(newEncodeError(RefusalMissingField, "a telemetry report needs a sequence (APRS12c ch. 13)"))
 	case !seqOK:
 		p.note(newEncodeError(RefusalMalformed, "a telemetry sequence is letters and digits"))
+	case len(t.Sequence) > 3 && t.Sequence[:3] == "MIC":
+		p.note(newEncodeError(RefusalMalformed, "a telemetry sequence that starts MIC is MIC itself (APRS12c ch. 13)"))
 	}
 	if len(t.Analog) > 5 {
 		p.note(newEncodeError(RefusalTooLong, "a telemetry report carries 5 analog values (APRS12c ch. 13)"))
@@ -142,7 +144,7 @@ func encodeTelemetry(t *Telemetry) ([]byte, *EncodeError) {
 	if err := p.finish(); err != nil {
 		return nil, err
 	}
-	// A sequence that starts MIC but is not MIC would not read back, for one.
+	// The read-back is the safety net (a sequence starting MIC is refused as malformed above).
 	if back, ok := decodeTelemetry(newContext(Lenient), out).(Telemetry); ok &&
 		back.Sequence == t.Sequence && samePtr(back.Bits, t.Bits) && back.Comment == t.Comment && len(back.Analog) == len(t.Analog) {
 		same := true
@@ -156,5 +158,5 @@ func encodeTelemetry(t *Telemetry) ([]byte, *EncodeError) {
 			return out, nil
 		}
 	}
-	return nil, newEncodeError(RefusalTextReadsAsField, "the telemetry report would not read back as given (a sequence starting MIC is MIC itself)")
+	return nil, newEncodeError(RefusalTextReadsAsField, "the telemetry report would not read back as given")
 }

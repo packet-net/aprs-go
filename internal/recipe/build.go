@@ -692,6 +692,10 @@ func stationOf(v any) (aprs.Station, error) {
 		return s, ok
 	}
 	source, _ := text("source")
+	if v == nil {
+		// A recipe with no station is from N0CALL, with the builder's own destination and no path.
+		source = "N0CALL"
+	}
 	station, err := aprs.NewStation(source)
 	if err != nil {
 		return station, err

@@ -600,9 +600,9 @@ func TestRoundFourEncoderLimitsAndControlCharacters(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = aprs.Encode(aprs.Status{Text: strings.Repeat("x", 256)})
-	eq(t, refusal(t, err), aprs.RefusalTooLong)
+	eq(t, refusal(t, err), aprs.RefusalInformationFieldTooLong)
 	_, err = aprs.Encode(aprs.Status{Text: strings.Repeat("\u00e9", 128)})
-	eq(t, refusal(t, err), aprs.RefusalTooLong)
+	eq(t, refusal(t, err), aprs.RefusalInformationFieldTooLong)
 	// A decoded field over 256 bytes decodes, and re-encodes refused.
 	long := "N0CALL>APZ001:>" + strings.Repeat("x", 300)
 	heard, err := aprs.DecodeTNC2([]byte(long), aprs.Strict)
@@ -610,7 +610,7 @@ func TestRoundFourEncoderLimitsAndControlCharacters(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = aprs.NewPacket(heard.Source, heard.Destination, heard.Path, heard.Data)
-	eq(t, refusal(t, err), aprs.RefusalTooLong)
+	eq(t, refusal(t, err), aprs.RefusalInformationFieldTooLong)
 	// A control character in text is refused, TAB included, and read with a warning.
 	_, err = aprs.Encode(aprs.Status{Text: "a\tb"})
 	eq(t, refusal(t, err), aprs.RefusalInvalidCharacter)
@@ -661,4 +661,34 @@ func TestARunOnWeatherValueIsDropped(t *testing.T) {
 		t.Errorf("%+v", w)
 	}
 	eq(t, heard.Diagnostics[len(heard.Diagnostics)-1].Code, aprs.CodeOutOfRangeValue)
+}
+
+// Data refuses what Build refuses for a symbol or timestamp not given (review 2026-11-14).
+func TestBuilderDataRefusesWhatBuildRefuses(t *testing.T) {
+	st, err := aprs.NewStation("N0CALL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.Position(51.5, -0.1).Data()
+	eq(t, refusal(t, err), aprs.RefusalInvalidSymbol)
+	_, err = st.Item("ITEM").At(51.5, -0.1).Data()
+	eq(t, refusal(t, err), aprs.RefusalInvalidSymbol)
+	_, err = st.MicE(51.5, -0.1).Data()
+	eq(t, refusal(t, err), aprs.RefusalInvalidSymbol)
+	_, err = st.Object("OBJ").At(51.5, -0.1).Symbol(aprs.SymbolCar).Data()
+	eq(t, refusal(t, err), aprs.RefusalMissingField)
+	_, err = st.Weather().Data()
+	eq(t, refusal(t, err), aprs.RefusalMissingField)
+	_, err = st.Position(51.5, -0.1).Symbol(aprs.SymbolCar).Data()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Storm data missing a required field is refused, never written with dots.
+func TestStormFieldMissingIsRefused(t *testing.T) {
+	_, err := aprs.Encode(aprs.ObjectReport{Name: "BRENDA", Timestamp: aprs.Ptr(aprs.TimestampDHM(10, 0, 45)), Fields: aprs.Positioned{
+		Position: aprs.Position{Latitude: 49.09, Longitude: -72.03}, Symbol: aprs.Symbol{Table: '/', Code: '@'},
+		Storm: &aprs.Storm{Kind: aprs.Hurricane}}})
+	eq(t, refusal(t, err), aprs.RefusalMissingField)
 }
