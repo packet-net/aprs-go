@@ -141,17 +141,15 @@ func decodeComment(ctx *context, fields *Positioned, bytes *cs, b []byte, offset
 }
 
 // weatherEnd gives where the weather text of a positioned report ends in b: the start of the
-// base-91 telemetry or !DAO! that trails it (lifted first, and so not part of the weather's
-// text), else the end of b. A run-on value before it counts as ending at the field's end.
+// first base-91 telemetry block or !DAO! that commentTail would lift (lifted first, and so not
+// part of the weather's text, wherever it sits), else the end of b. A run-on value that reaches
+// it counts as ending at the weather's end, and the text after it is comment text on its own.
 func weatherEnd(b []byte) int {
 	end := len(b)
-	spans := telemetryAndDAOSpans(b)
-	// The spans are last first: walk back from the end while each one is the last bytes left.
-	for _, sp := range spans {
-		if sp.end != end {
-			break
+	for _, sp := range telemetryAndDAOSpans(b) {
+		if sp.start < end {
+			end = sp.start
 		}
-		end = sp.start
 	}
 	return end
 }

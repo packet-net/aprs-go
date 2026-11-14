@@ -796,6 +796,17 @@ func encodeMicE(r *MicEReport) (Address, []byte, *EncodeError) {
 	switch {
 	case needsSpace:
 		separators = []string{" ", "", " /"}
+		// Free text after a frequency follows a space, and a / goes before it where it would not
+		// read back as itself without one: text that ends the status text as a device suffix
+		// would (" X"), so it is written " /X" rather than run on after the MHz (vectors README,
+		// "Delimiters at the start of free text").
+		if len(suffix) == 0 && r.TypeCode != nil {
+			t := byte(*r.TypeCode)
+			tail := append(append([]byte{' '}, text...), trailer...)
+			if micESuffixLen(&t, tail) > 0 {
+				separators = []string{" ", " /", ""}
+			}
+		}
 	case statusStartsWithCode:
 		separators = []string{"/"}
 	default:
