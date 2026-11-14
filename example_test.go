@@ -195,3 +195,26 @@ func ExamplePacket_KISS() {
 	// C0 00 82 A0
 	// M0LTE-9>APZ001:>hello
 }
+
+// The README's Mic-E and device identification snippet, with its comments checked.
+func Example_micEDevice() {
+	packet, _ := aprs.DecodeTNC2([]byte("N1JCM-9>TRQP7T,WA1PLE-4*:`c'wl|+>/`\"4-}_%"), aprs.Lenient)
+	device, _ := packet.Device()
+	fmt.Println(device) // Yaesu FTM-400DR
+
+	report := packet.Data.(aprs.MicEReport)
+	again, _ := aprs.NewPacket(packet.Source, packet.Destination, packet.Path, report)
+	fmt.Println(again.Destination == packet.Destination, string(again.Information) == string(packet.Information))
+	// Output:
+	// Yaesu FTM-400DR
+	// true true
+}
+
+func ExampleDevice_String() {
+	aprsdroid, _ := aprs.DeviceFromTocall("APDR16")
+	fmt.Println(aprsdroid)
+	fmt.Printf("%q %q\n", aprs.Device{Vendor: "Kenwood"}, aprs.Device{Model: "Homebrew"})
+	// Output:
+	// Open Source APRSdroid
+	// "Kenwood" "Homebrew"
+}
