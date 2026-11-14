@@ -543,3 +543,27 @@ func TestTelemetryBuilderRefusesInEncoderOrder(t *testing.T) {
 	_, err = st.Telemetry(1).Analog(v(1), v(2), v(3), v(4), v(5), v(6)).Build()
 	eq(t, err.(*aprs.EncodeError).Code(), aprs.RefusalTooLong)
 }
+
+// A setter replaces its quantity whatever unit it was given in: the last call wins.
+func TestBuilderSetterReplacesAcrossUnits(t *testing.T) {
+	a, err := me(t).Position(49.5, -72.5).Symbol(aprs.SymbolCar).SpeedKnots(10).SpeedKmh(18.52).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := me(t).Position(49.5, -72.5).Symbol(aprs.SymbolCar).SpeedKmh(18.52).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, string(a.Information), string(b.Information))
+}
+
+// A speed that is not a number is not-a-number, not out of range, in the three-digit form too.
+func TestNonFiniteSpeedIsNotANumber(t *testing.T) {
+	for _, v := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		_, err := aprs.Encode(aprs.PositionReport{Fields: aprs.Positioned{Position: aprs.Position{Latitude: 49.5, Longitude: -72.5}, Symbol: aprs.SymbolCar, SpeedKnots: aprs.Ptr(v), CourseDegrees: aprs.Ptr(88.0)}})
+		if err == nil {
+			t.Fatalf("speed %v: expected a refusal", v)
+		}
+		eq(t, err.(*aprs.EncodeError).Code(), aprs.RefusalNotANumber)
+	}
+}

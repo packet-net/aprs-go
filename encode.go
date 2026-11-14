@@ -770,6 +770,9 @@ func whole(v *float64, what string) (*uint32, *EncodeError) {
 	if v == nil {
 		return nil, nil
 	}
+	if !isFinite(*v) {
+		return nil, newEncodeError(RefusalNotANumber, what+" is not a number")
+	}
 	// Rounded first, so -0.3 is 0.
 	if r := roundSteps(*v); r >= 0 {
 		return Ptr(toU32(r)), nil
@@ -978,7 +981,9 @@ func positionedReadsBack(written []byte, f *Positioned) (string, bool) {
 		{samePtr(back.Signpost, f.Signpost), "signpost"},
 		{samePtr(datum(back.DAO), datum(f.DAO)), "DAO"},
 		{sameWeatherText(back.Weather, f.Weather), "weather"},
-		{close(back.AltitudeFeet, f.AltitudeFeet, 0.01) || rounded(back.AltitudeFeet, f.AltitudeFeet), "altitude"},
+		// A compressed weather report has no comment, so an altitude the cs bytes cannot hold exactly
+		// is written as the nearest cs value alone, and reads back rounded.
+		{close(back.AltitudeFeet, f.AltitudeFeet, 0.01) || rounded(back.AltitudeFeet, f.AltitudeFeet) || (f.Weather != nil && f.Compressed && back.AltitudeFeet != nil), "altitude"},
 		{close(back.RangeMiles, f.RangeMiles, 0.1) || rounded(back.RangeMiles, f.RangeMiles), "range"},
 	}
 	for _, c := range checks {
