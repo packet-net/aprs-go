@@ -6,8 +6,10 @@ package recipe
 
 import (
 	"math"
+	"strings"
 
 	aprs "github.com/packet-net/aprs-go"
+	"github.com/packet-net/aprs-go/internal/neutral"
 )
 
 // Outcome is what building a recipe gave: a packet, a refusal, or "unsupported" (the builder has no
@@ -17,6 +19,7 @@ type Outcome struct {
 	Refusal     string // the refusal code id, when the builder refused
 	Reason      string // the refusal's text
 	Unsupported string // why the recipe could not be built at all
+	Tool        bool   // the refusal is the dump tool's reader's, not the library's
 }
 
 // unitPairs are the quantities a recipe may give in two units. A recipe is one input, so one that
@@ -27,22 +30,14 @@ var unitPairs = [][2]string{
 	{"rain_1h_in", "rain_1h_mm"}, {"rain_24h_in", "rain_24h_mm"}, {"rain_midnight_in", "rain_midnight_mm"},
 }
 
-// refusalOrder is the README's Refusal reasons order.
-var refusalOrder = []string{
-	"not-encodable", "invalid-address", "ax25-cannot-carry", "tnc2-cannot-carry", "invalid-third-party-header",
-	"invalid-addressee", "invalid-name", "invalid-timestamp", "not-a-number", "value-out-of-range", "value-has-no-form",
-	"invalid-code", "invalid-symbol", "invalid-character", "too-long", "padding-space", "malformed", "invalid-message-id",
-	"invalid-nmea", "extension-conflict", "field-not-allowed", "symbol-mismatch", "missing-field", "value-given-twice",
-	"text-reads-as-field", "does-not-read-back",
-}
-
-func refusalRank(id string) int {
-	for i, c := range refusalOrder {
-		if c == id {
-			return i
-		}
+// refusalRank is a code's place in the Refusal reasons order. A refusal only for the information
+// field's 256 bytes is last: the size is judged after every other check, value-given-twice
+// included (the vectors README, Refusal reasons and One quantity, one value).
+func refusalRank(id, reason string) int {
+	if id == "too-long" && strings.Contains(reason, "an information field is at most 256 bytes") {
+		return neutral.RefusalRank("") + 1
 	}
-	return len(refusalOrder)
+	return neutral.RefusalRank(id)
 }
 
 // twoUnit builds a recipe that gives a quantity in two units once with each unit (every value is
@@ -61,6 +56,7 @@ func twoUnit(input map[string]any, args map[string]any) (Outcome, bool) {
 		return Outcome{}, false
 	}
 	best, reason := "value-given-twice", "a quantity given in two units"
+	bestRank := refusalRank(best, reason)
 	for side := 0; side < 2; side++ {
 		a := make(map[string]any, len(args))
 		for k, v := range args {
@@ -75,44 +71,101 @@ func twoUnit(input map[string]any, args map[string]any) (Outcome, bool) {
 		}
 		copied["args"] = a
 		if _, err := build(copied); err != nil {
-			if e, ok := err.(*aprs.EncodeError); ok && refusalRank(e.Code().ID()) < refusalRank(best) {
+			if e, ok := err.(*aprs.EncodeError); ok && refusalRank(e.Code().ID(), e.Error()) < bestRank {
 				best, reason = e.Code().ID(), e.Error()
-			} else if ia, ok := err.(*aprs.InvalidAddressError); ok && refusalRank("invalid-address") < refusalRank(best) {
+				bestRank = refusalRank(best, reason)
+			} else if ia, ok := err.(*aprs.InvalidAddressError); ok && refusalRank("invalid-address", "") < bestRank {
 				best, reason = "invalid-address", ia.Error()
+				bestRank = refusalRank(best, reason)
 			}
 		}
 	}
 	return Outcome{Refusal: best, Reason: reason}, true
 }
 
-// Build builds a recipe (an object with station, report and args). An ambiguity that is not a
-// finite number is not-a-number at its place in the order: it is left out of the build and ranked
-// with whatever else the recipe refuses.
+// standIn is an input of a recipe the builder cannot take, whose value alone decides a refusal
+// code (the vectors README, Encode records): it is replaced by a valid stand-in, and the recipe's
+// result is the first code in the order among the build's and these.
+type standIn struct{ code, reason string }
+
+// Build builds a recipe (an object with station, report and args). An ambiguity, a telemetry
+// sequence or a bulletin id that the builder cannot take is a refusal at its place in the order
+// (not-a-number or value-out-of-range, or invalid-addressee): it is left out or given a valid
+// stand-in for the build and ranked with whatever else the recipe refuses.
 func Build(input map[string]any) Outcome {
 	args, ok := input["args"].(map[string]any)
 	if !ok {
 		return buildFinite(input)
 	}
-	v, ok := args["ambiguity"].(float64)
-	if !ok || (!math.IsNaN(v) && !math.IsInf(v, 0)) {
-		return buildFinite(input)
-	}
 	rest := make(map[string]any, len(args))
 	for k, x := range args {
-		if k != "ambiguity" {
-			rest[k] = x
+		rest[k] = x
+	}
+	var pending []standIn
+	if v, ok := args["ambiguity"].(float64); ok && (math.IsNaN(v) || math.IsInf(v, 0)) {
+		delete(rest, "ambiguity")
+		pending = append(pending, standIn{"not-a-number", "ambiguity is not a number"})
+	}
+	switch input["report"] {
+	case "telemetry":
+		if c, why := sequenceFault(args["sequence"]); c != "" {
+			rest["sequence"] = int64(0)
+			pending = append(pending, standIn{c, why})
 		}
+	case "bulletin":
+		if id, isText := args["id"].(string); isText {
+			if _, one := oneChar(id); !one {
+				rest["id"] = "0"
+				pending = append(pending, standIn{"invalid-addressee", "a bulletin id is one character"})
+			}
+		}
+	}
+	if len(pending) == 0 {
+		return buildFinite(input)
 	}
 	copied := make(map[string]any, len(input))
 	for k, x := range input {
 		copied[k] = x
 	}
 	copied["args"] = rest
+	first := pending[0]
+	for _, p := range pending[1:] {
+		if neutral.RefusalRank(p.code) < neutral.RefusalRank(first.code) {
+			first = p
+		}
+	}
 	r := buildFinite(copied)
-	if r.Refusal != "" && refusalRank(r.Refusal) < refusalRank("not-a-number") {
+	if r.Refusal != "" && refusalRank(r.Refusal, r.Reason) < neutral.RefusalRank(first.code) {
 		return r
 	}
-	return Outcome{Refusal: "not-a-number", Reason: "ambiguity is not a number"}
+	return Outcome{Refusal: first.code, Reason: first.reason, Tool: true}
+}
+
+// sequenceFault says what refuses a telemetry sequence the builder cannot take: not-a-number for
+// NaN or an infinity, value-out-of-range for a whole number outside 0-65535. (A fraction is not
+// judged here.)
+func sequenceFault(v any) (string, string) {
+	f, ok := asNumber(v)
+	if !ok {
+		return "", ""
+	}
+	switch {
+	case math.IsNaN(f) || math.IsInf(f, 0):
+		return "not-a-number", "sequence is not a number"
+	case f == math.Trunc(f) && (f < 0 || f > 65535):
+		return "value-out-of-range", "sequence is outside 0-65535"
+	}
+	return "", ""
+}
+
+func asNumber(v any) (float64, bool) {
+	switch x := v.(type) {
+	case int64:
+		return float64(x), true
+	case float64:
+		return x, true
+	}
+	return 0, false
 }
 
 func buildFinite(input map[string]any) Outcome {

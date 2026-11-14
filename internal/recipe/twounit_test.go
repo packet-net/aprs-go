@@ -33,3 +33,26 @@ func TestNonFiniteAmbiguityRanksAsNotANumber(t *testing.T) {
 		t.Errorf("%v", r)
 	}
 }
+
+// A telemetry sequence or bulletin id the builder cannot take is a refusal made by the tool,
+// ranked with the build's own.
+func TestUntakeableInputsAreRefusalsNotUnsupported(t *testing.T) {
+	station := map[string]any{"source": "N0CALL"}
+	r := Build(map[string]any{"n": int64(1), "station": station, "report": "telemetry", "args": map[string]any{"sequence": int64(-1), "analog": []any{int64(1), int64(2), int64(3), int64(4), int64(5)}}})
+	if r.Refusal != "value-out-of-range" || !r.Tool || r.Unsupported != "" {
+		t.Errorf("sequence -1: %+v", r)
+	}
+	r = Build(map[string]any{"n": int64(1), "station": station, "report": "telemetry", "args": map[string]any{"sequence": math.Inf(1), "analog": []any{int64(1), int64(2), int64(3), int64(4), int64(5)}}})
+	if r.Refusal != "not-a-number" || !r.Tool {
+		t.Errorf("sequence Infinity: %+v", r)
+	}
+	r = Build(map[string]any{"n": int64(1), "station": station, "report": "bulletin", "args": map[string]any{"id": "AB", "text": "x"}})
+	if r.Refusal != "invalid-addressee" || !r.Tool {
+		t.Errorf("bulletin id AB: %+v", r)
+	}
+	// An earlier code in the build wins over the tool's: an invalid source is invalid-address.
+	r = Build(map[string]any{"n": int64(1), "station": map[string]any{"source": "bad call"}, "report": "bulletin", "args": map[string]any{"id": "AB", "text": "x"}})
+	if r.Refusal != "invalid-address" || r.Tool {
+		t.Errorf("bad source and bulletin id: %+v", r)
+	}
+}

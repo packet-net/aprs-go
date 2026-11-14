@@ -116,6 +116,9 @@ type Unreadable struct {
 	Refused bool
 	Code    aprs.RefusalCode
 	Reason  string
+	// Tool: this reader made the refusal, not the library's encoder (the dump record says
+	// "via": "tool"), for an input this package cannot hold whose value alone decides a code.
+	Tool bool
 }
 
 func (u *Unreadable) Error() string { return u.Reason }
@@ -128,11 +131,78 @@ func refused(code aprs.RefusalCode, reason string) *Unreadable {
 	return &Unreadable{Refused: true, Code: code, Reason: reason}
 }
 
+// toolRefused is a refusal the reader makes itself.
+func toolRefused(code aprs.RefusalCode, reason string) *Unreadable {
+	return &Unreadable{Refused: true, Code: code, Reason: reason, Tool: true}
+}
+
+// collector gathers the refusals of inputs this package cannot hold whose value alone decides a
+// code (a symbol that is not a table and a code, a path entry that is not an address, a bearing or
+// quality out of range). Each is replaced by a valid stand-in so that the rest of the data can be
+// encoded, and the result is settled afterwards (Settle): the first code in the Refusal reasons
+// order among the encoder's own refusal and these (vectors README, Encode records).
+type collector struct{ pending []*Unreadable }
+
+func (c *collector) note(code aprs.RefusalCode, reason string) {
+	if c != nil {
+		c.pending = append(c.pending, toolRefused(code, reason))
+	}
+}
+
+// first is the pending refusal that comes first in the order.
+func (c *collector) first() *Unreadable {
+	var best *Unreadable
+	for _, u := range c.pending {
+		if best == nil || RefusalRank(u.Code.ID()) < RefusalRank(best.Code.ID()) {
+			best = u
+		}
+	}
+	return best
+}
+
+// refusalOrder is the README's Refusal reasons order.
+var refusalOrder = []string{
+	"not-encodable", "invalid-address", "ax25-cannot-carry", "tnc2-cannot-carry", "invalid-third-party-header",
+	"invalid-addressee", "invalid-name", "invalid-timestamp", "not-a-number", "value-out-of-range", "value-has-no-form",
+	"invalid-code", "invalid-symbol", "invalid-character", "too-long", "padding-space", "malformed", "invalid-message-id",
+	"invalid-nmea", "extension-conflict", "field-not-allowed", "symbol-mismatch", "missing-field", "value-given-twice",
+	"text-reads-as-field", "does-not-read-back",
+}
+
+// RefusalRank is a code's place in the Refusal reasons order.
+func RefusalRank(id string) int {
+	for i, c := range refusalOrder {
+		if c == id {
+			return i
+		}
+	}
+	return len(refusalOrder)
+}
+
+// Settle gives the refusal of data read with stand-ins: the pending refusal (from ReadDataStandIn),
+// unless the encoder's own refusal (nil when it wrote) comes earlier in the order. A size
+// too-long is last: it counts only when no other code applies, so pending wins over it.
+func Settle(pending *Unreadable, encoder *aprs.RefusalCode, encoderReason string) (aprs.RefusalCode, string, bool) {
+	if pending == nil {
+		if encoder == nil {
+			return 0, "", false
+		}
+		return *encoder, encoderReason, false
+	}
+	if encoder != nil && RefusalRank(encoder.ID()) < RefusalRank(pending.Code.ID()) && !(encoder.ID() == "too-long" && isSize(encoderReason)) {
+		return *encoder, encoderReason, false
+	}
+	return pending.Code, pending.Reason, pending.Tool
+}
+
+func isSize(reason string) bool { return strings.Contains(reason, "information field is at most 256") }
+
 // keys is an object's keys, checked against the ones this package's data can hold, with getters
 // that name the key when a value will not fit.
 type keys struct {
 	o  map[string]any
 	at string
+	c  *collector
 }
 
 func newKeys(v any, at string, allowed []string) (*keys, *Unreadable) {
@@ -377,7 +447,11 @@ func (k *keys) object(key string, allowed []string) (*keys, *Unreadable) {
 	if v == nil {
 		return nil, nil
 	}
-	return newKeys(v, k.name(key), allowed)
+	o, err := newKeys(v, k.name(key), allowed)
+	if o != nil {
+		o.c = k.c
+	}
+	return o, err
 }
 
 // choice reads one of an enumeration's values, by its neutral name: the index in names.
@@ -457,8 +531,41 @@ func isHeaderDefect(c aprs.Code) bool {
 	return false
 }
 
-// ReadData makes neutral data into this package's data, or says why it cannot.
+// ReadData makes neutral data into this package's data, or says why it cannot. An input this
+// package cannot hold whose value alone decides a refusal code is a tool refusal here; the dump
+// tool and the runner use ReadDataStandIn and Settle to compare it with the encoder's own.
 func ReadData(v any) (aprs.Data, *Unreadable) {
+	d, pending, err := ReadDataStandIn(v)
+	if err != nil {
+		return nil, err
+	}
+	if pending != nil {
+		return nil, pending
+	}
+	return d, nil
+}
+
+// ReadDataStandIn is ReadData with every input it cannot hold, and whose value alone decides a
+// refusal code, left out or given a valid stand-in, and the first of their refusals in the order
+// as pending (nil when there is none). An error, if any, is final: when it is a refusal and
+// something is pending, the earlier of the two is the error.
+func ReadDataStandIn(v any) (aprs.Data, *Unreadable, *Unreadable) {
+	c := &collector{}
+	d, err := readData(v, c)
+	pending := c.first()
+	if err != nil && pending != nil && err.Refused {
+		if RefusalRank(pending.Code.ID()) < RefusalRank(err.Code.ID()) {
+			return nil, nil, pending
+		}
+		return nil, nil, err
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	return d, pending, nil
+}
+
+func readData(v any, c *collector) (aprs.Data, *Unreadable) {
 	var kind string
 	if m, ok := v.(map[string]any); ok {
 		kind, _ = m["type"].(string)
@@ -537,6 +644,7 @@ func ReadData(v any) (aprs.Data, *Unreadable) {
 	if err != nil {
 		return nil, err
 	}
+	o.c = c
 	return readKind(o, kind)
 }
 
@@ -899,11 +1007,11 @@ func readKind(o *keys, kind string) (aprs.Data, *Unreadable) {
 	case "test":
 		return aprs.TestData{Data: text("data")}, err
 	case "agrelo-df":
-		b, berr := requiredInteger[uint16](o, "bearing_degrees")
+		b, berr := agreloBearing(o)
 		if berr != nil {
 			return nil, berr
 		}
-		q, qerr := requiredInteger[uint8](o, "quality")
+		q, qerr := agreloQuality(o)
 		if qerr != nil {
 			return nil, qerr
 		}
@@ -971,7 +1079,8 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 	for _, e := range pathTexts {
 		entry, ok := ReadPathEntry(e)
 		if !ok {
-			return nil, unsupported("path: not an address")
+			o.c.note(aprs.RefusalInvalidThirdPartyHeader, "path: not an address")
+			continue
 		}
 		entries = append(entries, entry)
 	}
@@ -991,14 +1100,18 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 	if dataValue == nil {
 		return nil, p.missing("data")
 	}
-	data, err := ReadData(dataValue)
+	data, err := readData(dataValue, o.c)
 	if err != nil && !err.Refused {
+		return nil, err
+	}
+	// not-encodable is the first refusal reason: nothing outranks it, a header defect included.
+	if err != nil && err.Code == aprs.RefusalNotEncodable {
 		return nil, err
 	}
 	// Undecoded data has no neutral form of its bytes: not-encodable, the first of the refusal
 	// reasons, which no header fault outranks.
 	if d, ok := data.(aprs.Unrecognized); ok && d != aprs.UnrecognizedEmpty {
-		return nil, unsupported("packet.data: undecoded, and its bytes are not in the neutral form")
+		return nil, toolRefused(aprs.RefusalNotEncodable, "packet.data: undecoded, and its bytes are not in the neutral form")
 	}
 	// A header the encoder cannot write back is refused before the inner data's own faults are
 	// named (invalid-third-party-header comes before them in the refusal order).
@@ -1026,7 +1139,7 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 	switch d := data.(type) {
 	case aprs.Unrecognized:
 		if d != aprs.UnrecognizedEmpty {
-			return nil, unsupported("packet.data: undecoded, and its bytes are not in the neutral form")
+			return nil, toolRefused(aprs.RefusalNotEncodable, "packet.data: undecoded, and its bytes are not in the neutral form")
 		}
 	default:
 		info, eerr := aprs.Encode(data)
@@ -1103,7 +1216,8 @@ func readSymbol(o *keys) (*aprs.Symbol, *Unreadable) {
 	}
 	r := []rune(*s)
 	if len(r) != 2 {
-		return nil, unsupported("symbol: not a table and a code")
+		o.c.note(aprs.RefusalInvalidSymbol, "symbol: not a table and a code")
+		return &aprs.Symbol{Table: '/', Code: '-'}, nil
 	}
 	return &aprs.Symbol{Table: r[0], Code: r[1]}, nil
 }
@@ -1441,4 +1555,58 @@ func readWeather(o *keys) (*aprs.Weather, *Unreadable) {
 		return nil, err
 	}
 	return &out, nil
+}
+
+// agreloBearing reads an Agrelo bearing as an encoder takes it: rounded to the nearest degree like
+// a course (halves away from zero), then range-checked. This package holds 0 to 65535, and the
+// encoder judges 0 to 360; a bearing past what is held, or not a number, is a refusal made here
+// (value-out-of-range, not-a-number) with 0 as the stand-in.
+func agreloBearing(o *keys) (uint16, *Unreadable) {
+	v := o.get("bearing_degrees")
+	if v == nil {
+		return 0, o.missing("bearing_degrees")
+	}
+	x, ok := asFloat(v)
+	if !ok {
+		return 0, unsupported("%s: not a number", o.name("bearing_degrees"))
+	}
+	if math.IsNaN(x) || math.IsInf(x, 0) {
+		o.c.note(aprs.RefusalNotANumber, "bearing_degrees: not a number")
+		return 0, nil
+	}
+	r := roundSteps(x)
+	if r < 0 || r > math.MaxUint16 {
+		o.c.note(aprs.RefusalValueOutOfRange, "bearing_degrees: outside 0-360 once rounded")
+		return 0, nil
+	}
+	return uint16(r), nil
+}
+
+// agreloQuality reads an Agrelo quality, which is not rounded: a whole number, held 0 to 255, and
+// one outside 0-9 is value-out-of-range, a non-finite one not-a-number.
+func agreloQuality(o *keys) (uint8, *Unreadable) {
+	v := o.get("quality")
+	if v == nil {
+		return 0, o.missing("quality")
+	}
+	x, ok := asFloat(v)
+	if !ok {
+		return 0, unsupported("%s: not a number", o.name("quality"))
+	}
+	if math.IsNaN(x) || math.IsInf(x, 0) {
+		o.c.note(aprs.RefusalNotANumber, "quality: not a number")
+		return 0, nil
+	}
+	if x != math.Trunc(x) {
+		if x < 0 || x > 9 {
+			o.c.note(aprs.RefusalValueOutOfRange, "quality: outside 0-9")
+			return 0, nil
+		}
+		return 0, unsupported("%s: not a whole number", o.name("quality"))
+	}
+	if x < 0 || x > 9 {
+		o.c.note(aprs.RefusalValueOutOfRange, "quality: outside 0-9")
+		return 0, nil
+	}
+	return uint8(x), nil
 }

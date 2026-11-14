@@ -371,10 +371,10 @@ func api(p *aprs.Packet) map[string]any {
 
 func encodeRecord(input map[string]any) map[string]any {
 	n := input["n"]
-	data, unreadable := neutral.ReadData(input["data"])
+	data, pending, unreadable := neutral.ReadDataStandIn(input["data"])
 	if unreadable != nil {
 		if unreadable.Refused {
-			return map[string]any{"n": n, "result": "refused", "reason": unreadable.Reason, "refusal": unreadable.Code.ID()}
+			return refusedRecord(n, unreadable.Reason, unreadable.Code, unreadable.Tool)
 		}
 		return map[string]any{"n": n, "result": "unsupported", "reason": unreadable.Reason}
 	}
@@ -390,14 +390,31 @@ func encodeRecord(input map[string]any) map[string]any {
 	} else {
 		info, err = aprs.Encode(data)
 	}
-	if err != nil {
-		e := err.(*aprs.EncodeError)
-		return map[string]any{"n": n, "result": "refused", "reason": e.Error(), "refusal": e.Code().ID()}
+	if err != nil || pending != nil {
+		var code *aprs.RefusalCode
+		reason := ""
+		if err != nil {
+			e := err.(*aprs.EncodeError)
+			c := e.Code()
+			code, reason = &c, e.Error()
+		}
+		settled, why, tool := neutral.Settle(pending, code, reason)
+		return refusedRecord(n, why, settled, tool)
 	}
 	// The bytes decoded leniently under N0CALL> and the destination.
 	p := aprs.Decode(source, destination, nil, info, aprs.Lenient)
 	again := map[string]any{"data": neutral.Data(p.Data), "diagnostics": anyStrings(neutral.Diagnostics(p.Diagnostics))}
 	return map[string]any{"n": n, "result": "written", "info": toHex(info), "destination": destination.String(), "again": again}
+}
+
+// refusedRecord is a refused dump record; "via" says "tool" when the dump tool's reader made the
+// refusal (an input this package cannot hold whose value alone decides the code), not the library.
+func refusedRecord(n any, reason string, code aprs.RefusalCode, tool bool) map[string]any {
+	r := map[string]any{"n": n, "result": "refused", "reason": reason, "refusal": code.ID()}
+	if tool {
+		r["via"] = "tool"
+	}
+	return r
 }
 
 // ------------------------------------------------------------------ build
@@ -411,7 +428,11 @@ func buildRecord(input map[string]any) map[string]any {
 	case o.Unsupported != "":
 		return map[string]any{"n": n, "result": "unsupported", "reason": o.Unsupported}
 	case o.Refusal != "":
-		return map[string]any{"n": n, "result": "refused", "reason": o.Reason, "refusal": o.Refusal}
+		r := map[string]any{"n": n, "result": "refused", "reason": o.Reason, "refusal": o.Refusal}
+		if o.Tool {
+			r["via"] = "tool"
+		}
+		return r
 	}
 	line := o.Packet.TNC2()
 	decoded, _ := result(line, aprs.Lenient)

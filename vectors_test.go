@@ -428,17 +428,12 @@ func encodeCheck(c vectorCase) []string {
 	input := c["input"].(map[string]any)
 	expect := c["expect"].(map[string]any)
 	wantRefused, _ := expect["refused"].(bool)
-	data, unreadable := neutral.ReadData(input["encode"])
+	data, pending, unreadable := neutral.ReadDataStandIn(input["encode"])
 	var p *aprs.Packet
 	var refusal *aprs.RefusalCode
 	var reason string
 	switch {
 	case unreadable != nil && !unreadable.Refused:
-		// The one record Go's types cannot hold, by name; anything else the reader cannot hold is
-		// a failure, not a skip.
-		if c["id"] == "encode/nested-third-party-ending-in-undecoded-data" {
-			return nil // undecoded data has no neutral form of its bytes (not-encodable)
-		}
 		return []string{"encode: this package's data cannot hold it: " + unreadable.Reason}
 	case unreadable != nil:
 		refusal, reason = &unreadable.Code, unreadable.Reason
@@ -446,11 +441,20 @@ func encodeCheck(c vectorCase) []string {
 		source := aprs.MustAddress(textOr(input, "source", "N0CALL"))
 		destination := aprs.MustAddress(textOr(input, "destination", "APZ001"))
 		created, err := aprs.NewPacket(source, destination, nil, data)
+		var encoder *aprs.RefusalCode
+		var why string
 		if err != nil {
 			code := err.(*aprs.EncodeError).Code()
-			refusal, reason = &code, err.Error()
+			encoder, why = &code, err.Error()
 		}
-		p = created
+		// An input this package cannot hold whose value alone decides a code was given a stand-in
+		// by the reader: the first code in the order among it and the encoder's decides.
+		if pending != nil || encoder != nil {
+			code, text, _ := neutral.Settle(pending, encoder, why)
+			refusal, reason = &code, text
+		} else {
+			p = created
+		}
 	}
 	if refusal != nil {
 		if !wantRefused {
