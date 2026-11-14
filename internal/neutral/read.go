@@ -382,7 +382,7 @@ func stepped[T integer](k *keys, key string) (*T, *Unreadable) {
 		if t, ok := fits[T](n); ok {
 			return &t, nil
 		}
-		return nil, refused(aprs.RefusalValueOutOfRange, k.name(key)+": outside its field")
+		return nil, toolRefused(aprs.RefusalValueOutOfRange, k.name(key)+": outside its field")
 	}
 	x, ok := asFloat(v)
 	if !ok || math.IsNaN(x) || math.IsInf(x, 0) {
@@ -394,7 +394,7 @@ func stepped[T integer](k *keys, key string) (*T, *Unreadable) {
 			return &t, nil
 		}
 	}
-	return nil, refused(aprs.RefusalValueOutOfRange, k.name(key)+": outside its field once rounded")
+	return nil, toolRefused(aprs.RefusalValueOutOfRange, k.name(key)+": outside its field once rounded")
 }
 
 // roundSteps rounds a value measured in steps to the nearest, halves (within 1e-6) away from
@@ -1037,7 +1037,7 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 		cur = data
 	}
 	if depth > 4 {
-		return nil, refused(aprs.RefusalInvalidThirdPartyHeader, "third-party packets nest at most four deep")
+		return nil, toolRefused(aprs.RefusalInvalidThirdPartyHeader, "third-party packets nest at most four deep")
 	}
 	// The inner packet as the neutral form gives it: its source may be any third-party source
 	// (APRS12c ch. 17), and its diagnostics are part of the data. This package keeps the inner
@@ -1063,7 +1063,7 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 		return nil, err
 	}
 	if destinationText == "" {
-		return nil, refused(aprs.RefusalInvalidThirdPartyHeader, "the third-party packet has no destination")
+		return nil, toolRefused(aprs.RefusalInvalidThirdPartyHeader, "the third-party packet has no destination")
 	}
 	destination, derr := aprs.NewAddress(destinationText)
 	if derr != nil {
@@ -1128,7 +1128,7 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 		usedOutOfOrder = usedOutOfOrder || !entries[i].Used
 	}
 	if headerDefect || usedOutOfOrder {
-		return nil, refused(aprs.RefusalInvalidThirdPartyHeader, "the third-party packet's header cannot be written back")
+		return nil, toolRefused(aprs.RefusalInvalidThirdPartyHeader, "the third-party packet's header cannot be written back")
 	}
 	if err != nil {
 		return nil, err
