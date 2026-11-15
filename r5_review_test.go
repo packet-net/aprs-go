@@ -248,3 +248,36 @@ func TestFieldIsReadUnderTheHeaderWritten(t *testing.T) {
 		t.Fatalf("inner Mic-E: %q, %v", b, err)
 	}
 }
+
+// A held Mic-E report re-addressed to another Mic-E destination is not-encodable: its data is read
+// back under the destination written, and a different latitude digit or SSID is different data.
+// A packet built from a latitude between steps is still written under its computed destination.
+func TestHeldMicEReportReAddressedToAnotherMicEDestination(t *testing.T) {
+	const raw = "`(_fn\"Oj/"
+	heard, err := aprs.DecodeTNC2([]byte("N0CALL>S32U6T:"+raw), aprs.Lenient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := heard.TNC2Line(); err != nil {
+		t.Fatalf("under its own destination: %v", err)
+	}
+	for _, destination := range []string{"S32U7T", "S32U6T-3", "T32U6T"} {
+		moved := *heard
+		moved.Destination = aprs.MustAddress(destination)
+		_, err := moved.TNC2Line()
+		if err == nil {
+			t.Errorf("%s: written", destination)
+			continue
+		}
+		eq(t, refusal(t, err), aprs.RefusalNotEncodable)
+		_, err = moved.AX25()
+		eq(t, refusal(t, err), aprs.RefusalNotEncodable)
+	}
+	built, err := me(t).MicE(33.4273333, -12.12904).MicEMessage(aprs.MicEReturning).Symbol(aprs.NewSymbol('/', 'j')).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if line, err := built.TNC2Line(); err != nil {
+		t.Errorf("a built packet under its computed destination: %q, %v", line, err)
+	}
+}
