@@ -793,7 +793,7 @@ func frequencyAt(t *liftedText, start int) (VoiceFrequency, int, bool) {
 	// a place something was lifted from. Only a lifted /A= may come before its space.
 	field := func(at int) ([]byte, bool) {
 		b, ok := get(c, at, at+5)
-		if !ok || b[0] != ' ' || t.cut[start+at]&^cutAltitude != 0 || !t.whole(start+at+1, start+at+5) {
+		if !ok || b[0] != ' ' || t.cut[start+at]&^cutAltitude != 0 || !t.whole(start+at, start+at+5) {
 			return nil, false
 		}
 		if at+5 < len(c) && c[at+5] != ' ' && t.cut[start+at+5] == 0 {

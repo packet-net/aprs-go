@@ -59,6 +59,30 @@ func TestLiftingNeverJoinsTheTextEitherSide(t *testing.T) {
 		{"offset after an altitude and a tone", pos + "146.520MHz T100/A=000100 -060 x", "APZ001", "x", func(t *testing.T, f aprs.Positioned) {
 			eq(t, *f.Frequency.OffsetKHz, int32(-600))
 		}},
+		{"tone after a space and a dao", pos + "146.520MHz !W12!T100 x", "APZ001", "T100 x", func(t *testing.T, f aprs.Positioned) {
+			eq(t, f.Frequency.Tone == nil, true)
+		}},
+		{"tone after a space and telemetry", pos + "146.520MHz |!!!!|T100 x", "APZ001", "T100 x", func(t *testing.T, f aprs.Positioned) {
+			eq(t, f.Frequency.Tone == nil, true)
+		}},
+		{"offset after a space and a dao", pos + "146.520MHz T100 !W12!-060 x", "APZ001", "-060 x", func(t *testing.T, f aprs.Positioned) {
+			eq(t, f.Frequency.Tone != nil, true)
+			eq(t, f.Frequency.OffsetKHz == nil, true)
+		}},
+		{"range after a space and a late phg", pos + "146.520MHz T100 -060 PHG3330R25m", "APZ001", "R25m", func(t *testing.T, f aprs.Positioned) {
+			eq(t, f.Frequency.Range == nil, true)
+		}},
+		{"tone with its space before an altitude", pos + "146.520MHz /A=000100T100 x", "APZ001", "T100 x", func(t *testing.T, f aprs.Positioned) {
+			eq(t, f.Frequency.Tone == nil, true)
+			eq(t, *f.AltitudeFeet, 100.0)
+		}},
+		{"offset with its space before an altitude", pos + "146.520MHz T100 /A=000100-060 x", "APZ001", "-060 x", func(t *testing.T, f aprs.Positioned) {
+			eq(t, f.Frequency.Tone != nil, true)
+			eq(t, f.Frequency.OffsetKHz == nil, true)
+		}},
+		{"signpost braces between a space and a tone", "@092345z4903.50N\\07201.75Wm146.520MHz {55}T100 x", "APZ001", "T100 x", func(t *testing.T, f aprs.Positioned) {
+			eq(t, f.Frequency.Tone == nil, true)
+		}},
 		{"frequency after a phg lifted from its start", pos + "PHG3330146.520MHz x", "APZ001", "x", func(t *testing.T, f aprs.Positioned) {
 			eq(t, f.Frequency != nil, true)
 		}},
