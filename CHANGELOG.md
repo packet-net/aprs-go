@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Round 5 of the conformance vectors (vectors submodule pinned at b118424): in a `/` or `@` report whose timestamp is not valid, when the seventh byte after the DTI is `z`, `/` or `h` and an uncompressed position follows the seven bytes (`@R30549z2831.07N/08142.92W_...`), the timestamp is garbled and the position is read after it, with `malformed-timestamp`; before, bytes such as `R30549z2831.0` could read as a compressed position straight after the DTI.
+- Round 5 of the conformance vectors (vectors submodule pinned at 201f7b2): in a `/` or `@` report whose timestamp is not valid, when the seventh byte after the DTI is `z`, `/` or `h` and an uncompressed position follows the seven bytes (`@R30549z2831.07N/08142.92W_...`), the timestamp is garbled and the position is read after it, with `malformed-timestamp`; before, bytes such as `R30549z2831.0` could read as a compressed position straight after the DTI.
+- A Mic-E locator's space is judged on the text after every lifted element is out, including a later altitude and the base-91 telemetry it leaves between the bars (`mic-e/telemetry-left-once-an-altitude-is-lifted-then-a-spaced-comment`): lenient no longer gives `missing-space-after-locator` there. The vectors runner's tolerance check now skips a case whose `strict` is rejected by a code other than the one tolerance, and the test log says how many cases it ran on (725).
 
 ## 1.2.0 (2026-11-14)
 

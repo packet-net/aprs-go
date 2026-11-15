@@ -96,7 +96,7 @@ func knownDifferences(t *testing.T) map[string]string {
 func TestVectors(t *testing.T) {
 	known := knownDifferences(t)
 	cases := loadCases(t)
-	ran := 0
+	ran, toleranceRan := 0, 0
 	for _, c := range cases {
 		id := c["id"].(string)
 		input := c["input"].(map[string]any)
@@ -123,8 +123,9 @@ func TestVectors(t *testing.T) {
 		run("lenient", lenientCheck)
 		run("strict", strictCheck)
 		if _, ok := c["strict"].(map[string]any); ok {
-			if _, ok := toleranceFor(c); ok {
+			if code, ok := toleranceFor(c); ok && !strictRejectedByOther(c, code) {
 				run("tolerance", toleranceCheck)
+				toleranceRan++
 			}
 		}
 		if _, ok := c["reencode"]; ok {
@@ -132,7 +133,7 @@ func TestVectors(t *testing.T) {
 		}
 		run("readback", readbackCheck)
 	}
-	t.Logf("%d cases, %d checks", len(cases), ran)
+	t.Logf("%d cases, %d checks, tolerance check ran on %d cases", len(cases), ran, toleranceRan)
 }
 
 // ------------------------------------------------------------------ decoding
@@ -296,6 +297,17 @@ func containsString(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// strictRejectedByOther is true when the case's strict result is a rejection by a code other than
+// the tolerance, which the tolerance check then leaves out (README, "Checking a case").
+func strictRejectedByOther(c vectorCase, tolerance aprs.Code) bool {
+	s, ok := c["strict"].(map[string]any)
+	if !ok {
+		return false
+	}
+	rejectedBy, ok := s["rejected_by"].(string)
+	return ok && rejectedBy != tolerance.ID()
 }
 
 // toleranceFor gives the one tolerance a case's lenient decoding used, if exactly one.

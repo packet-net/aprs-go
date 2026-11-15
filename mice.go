@@ -280,7 +280,18 @@ func micEStatus(ctx *context, report *MicEReport, b []byte, offset int) bool {
 		// Base-91 telemetry and a !DAO! are lifted out before the locator is read, so a locator
 		// followed straight by them alone has nothing after it (vectors interpretations.md,
 		// "Where a Mic-E locator is read").
-		if lifted := withoutTelemetryAndDAO(s); len(lifted) > 0 {
+		// A later altitude that will be lifted is out too, and what it leaves between two bars
+		// may be telemetry, so the space is judged on the text after every lifted element.
+		after := s
+		if !firstOK && ctx.options.Tolerates(CodeMicEAltitudeNotFirst) {
+			for i := 0; i+3 < len(s); i++ {
+				if _, ok := micEAltitude(s[i:]); ok {
+					after = drain(append([]byte(nil), s...), i, i+4)
+					break
+				}
+			}
+		}
+		if lifted := withoutTelemetryAndDAO(after); len(lifted) > 0 {
 			if lifted[0] == ' ' {
 				// Its space is the locator's even with telemetry before it in the bytes; one at the
 				// very start is dropped here, the other is the comment's own delimiter.

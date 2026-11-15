@@ -702,3 +702,40 @@ func TestMicELocatorThenTelemetryThenASpacedCommentHasItsSpace(t *testing.T) {
 	eq(t, *m.Locator, "IO91")
 	eq(t, m.Fields.Comment, "DG2MM")
 }
+
+// The locator's space is judged on the text after every lifted element is out: a later Mic-E
+// altitude, and the base-91 telemetry it leaves between the bars.
+func TestMicELocatorSpaceAfterALaterAltitudeAndTheTelemetryItLeaves(t *testing.T) {
+	const telemetry = `!:&0hl!Y[/>` + `"4e}` + `='p`
+	for _, tc := range []struct{ name, status, comment string }{
+		{"spaced comment", "|" + telemetry + "| DG2MM", "DG2MM"},
+		{"nothing after the bars", "|" + telemetry + "|", ""},
+		{"altitude at the start of the bars", "|" + `"4e}!:&0hl!Y[/>='p` + "| DG2MM", "DG2MM"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			line := []byte("N0CALL>S32UVT:`(_fn\"Oj/`IO91/G" + tc.status)
+			p, err := aprs.DecodeTNC2(line, aprs.Lenient)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, d := range p.Diagnostics {
+				if d.Code == aprs.CodeMissingSpaceAfterLocator {
+					t.Errorf("lenient gave %s", d.Code)
+				}
+			}
+			m := p.Data.(aprs.MicEReport)
+			eq(t, m.Fields.Comment, tc.comment)
+			if m.Fields.Telemetry == nil || m.Fields.AltitudeFeet == nil {
+				t.Errorf("telemetry %v altitude %v", m.Fields.Telemetry, m.Fields.AltitudeFeet)
+			}
+		})
+	}
+	// Strict leaves the altitude as text, so there is no telemetry and the space is missing.
+	p, err := aprs.DecodeTNC2([]byte("N0CALL>S32UVT:`(_fn\"Oj/`IO91/G|"+telemetry+"| DG2MM"), aprs.Strict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, bad := p.Data.(aprs.MicEReport); bad {
+		t.Errorf("strict accepted %v", p.Data)
+	}
+}
