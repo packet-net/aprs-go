@@ -399,7 +399,12 @@ func stepped[T integer](k *keys, key string) (*T, *Unreadable) {
 		return nil, toolRefused(aprs.RefusalValueOutOfRange, k.name(key)+": outside its field")
 	}
 	x, ok := asFloat(v)
-	if !ok || math.IsNaN(x) || math.IsInf(x, 0) {
+	if ok && (math.IsNaN(x) || math.IsInf(x, 0)) {
+		k.c.note(aprs.RefusalNotANumber, k.name(key)+": not a number")
+		var zero T
+		return &zero, nil
+	}
+	if !ok {
 		return nil, unsupported("%s: not a number", k.name(key))
 	}
 	r := roundSteps(x)
@@ -722,8 +727,16 @@ func readKind(o *keys, kind string) (aprs.Data, *Unreadable) {
 		} else if ok {
 			for _, x := range a {
 				n, ok := whole(x)
-				if !ok || n < 0 || n > 255 {
-					return nil, unsupported("legacy_telemetry: values are bytes, 0-255")
+				if y, isNum := asFloat(x); !ok && isNum && (math.IsNaN(y) || math.IsInf(y, 0)) {
+					o.c.note(aprs.RefusalNotANumber, "legacy_telemetry: not a number")
+					n, ok = 0, true
+				} else if !ok && isNum || ok && (n < 0 || n > 255) {
+					// Bytes: a fraction or a number past 0-255 is outside what a value holds.
+					o.c.note(aprs.RefusalValueOutOfRange, "legacy_telemetry: values are bytes, 0-255")
+					n, ok = 0, true
+				}
+				if !ok {
+					return nil, unsupported("legacy_telemetry: values are numbers")
 				}
 				r.LegacyTelemetry = append(r.LegacyTelemetry, byte(n))
 			}

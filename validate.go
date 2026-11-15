@@ -192,6 +192,10 @@ func innerRuleFault(data Data) *EncodeError {
 		if !ok || tp.Packet == nil {
 			break
 		}
+		// The inner header of the packet being written is judged; the data's own deeper packet
+		// has its header written inside an information field as received, but a header the held
+		// packet gives out of order is the same fault wherever it is held.
+		note(thirdPartyHeader(tp.Packet))
 		data = tp.Packet.Data
 	}
 	return best

@@ -743,11 +743,13 @@ func encodeOther(data Data) (forms, *EncodeError) {
 		}
 	case TestData:
 		// Test data is data, not text: only a line break would not read back.
-		if hasLineBreak([]byte(d.Data)) {
-			return forms{}, newEncodeError(RefusalInvalidCharacter, "test data cannot contain a line break")
-		}
 		out = append(out, ',')
 		out = append(out, d.Data...)
+		// A line break inside is written (an information field alone is not judged for it; a line
+		// refuses it as tnc2-cannot-carry); one at the very end would be taken off on the way back.
+		if last := out[len(out)-1]; last == '\r' || last == '\n' {
+			return forms{}, newEncodeError(RefusalInvalidCharacter, "test data cannot end with a line break, which would not read back")
+		}
 	case AgreloDF:
 		if d.BearingDegrees > 360 || d.Quality > 9 {
 			return forms{}, newEncodeError(RefusalValueOutOfRange, "an Agrelo bearing is 0-360 and the quality 0-9")

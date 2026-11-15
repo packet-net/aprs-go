@@ -3,6 +3,7 @@ package aprs
 import (
 	"fmt"
 	"math"
+	"reflect"
 )
 
 // Encoding data back into an information field. The encoder writes only what APRS12c allows, and
@@ -77,10 +78,20 @@ func formsFor(data Data, bytesFirst bool) (forms, *EncodeError) {
 	if err := validate(data); err != nil {
 		return forms{}, err
 	}
+	var f forms
+	var err *EncodeError
 	if m, ok := data.(MicEReport); ok {
-		return encodeMicE(&m, bytesFirst)
+		f, err = encodeMicE(&m, bytesFirst)
+	} else {
+		f, err = encodeForms(data)
 	}
-	return encodeForms(data)
+	// A NaN or an infinity in any number of the data is not-a-number, wherever it is and whichever
+	// field the encoder looks at: found by walking the data, not field by field, and named
+	// unless a rule that comes before it in the Refusal reasons order names a fault first.
+	if holdsNonFinite(reflect.ValueOf(data)) && (err == nil || err.code.rank() > RefusalNotANumber.rank()) {
+		return forms{}, newEncodeError(RefusalNotANumber, "a number is NaN or infinite")
+	}
+	return f, err
 }
 
 // encodeForms gives the forms an information field may be written in, after the rules' own
@@ -288,6 +299,9 @@ func encodePositioned(out []byte, f *Positioned, p *pending) (forms, *EncodeErro
 		}
 		if f.Area != nil && f.Area.CorridorWidthMiles != nil {
 			w := *f.Area.CorridorWidthMiles
+			if f.Area.Shape != AreaLineDownRight && f.Area.Shape != AreaLineDownLeft {
+				p.note(newEncodeError(RefusalFieldNotAllowed, "a corridor width belongs to a line area (shapes 1 and 6): this report has no place for it"))
+			}
 			if w > 999 {
 				p.note(newEncodeError(RefusalValueOutOfRange, "an area corridor width is at most 999 miles"))
 			}
