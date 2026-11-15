@@ -191,17 +191,14 @@ type Written struct {
 
 // Write builds a recipe and writes the packet as a TNC2 line, or as an AX.25 frame when frame is
 // set. The header is read back by the library's writers, so a path they cannot carry is refused
-// there (tnc2-cannot-carry, ax25-cannot-carry). A data fault the builder found comes first in the
-// refusal order; only the size refusal, which is last, gives way to a header the form cannot carry.
+// there (tnc2-cannot-carry, ax25-cannot-carry). A data fault or the size refusal the builder
+// found comes before a header the form cannot carry, which is last in the refusal order.
 func Write(input map[string]any, frame bool) Written {
 	o := Build(input)
 	if o.Unsupported != "" {
 		return Written{Outcome: o}
 	}
 	if o.Refusal != "" {
-		if code, reason := headerRefusal(input, frame); code != "" && neutral.RefusalRank(code) < neutral.RefusalRank(o.Refusal) {
-			return Written{Outcome: Outcome{Refusal: code, Reason: reason}}
-		}
 		return Written{Outcome: o}
 	}
 	var b []byte
@@ -216,22 +213,4 @@ func Write(input map[string]any, frame bool) Written {
 		return Written{Outcome: Outcome{Refusal: e.Code().ID(), Reason: e.Error()}}
 	}
 	return Written{Outcome: o, Bytes: b}
-}
-
-// headerRefusal is the refusal the library's writer gives the recipe's station header alone.
-func headerRefusal(input map[string]any, frame bool) (string, string) {
-	station, err := stationOf(input["station"])
-	if err != nil {
-		return "", ""
-	}
-	p := &aprs.Packet{Source: station.Source(), Destination: station.Destination(), Path: station.Path()}
-	if frame {
-		_, err = p.AX25()
-	} else {
-		_, err = p.TNC2Line()
-	}
-	if e, ok := err.(*aprs.EncodeError); ok {
-		return e.Code().ID(), e.Error()
-	}
-	return "", ""
 }

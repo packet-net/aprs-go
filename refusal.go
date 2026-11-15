@@ -130,7 +130,7 @@ var refusalOrder = [...]RefusalCode{
 	RefusalInvalidCharacter, RefusalTooLong, RefusalPaddingSpace, RefusalMalformed, RefusalInvalidMessageID,
 	RefusalInvalidNMEA, RefusalExtensionConflict, RefusalFieldNotAllowed, RefusalSymbolMismatch,
 	RefusalMissingField, RefusalValueGivenTwice, RefusalTextReadsAsField, RefusalDoesNotReadBack,
-	RefusalAX25CannotCarry, RefusalTNC2CannotCarry, RefusalInformationFieldTooLong,
+	RefusalInformationFieldTooLong, RefusalAX25CannotCarry, RefusalTNC2CannotCarry,
 }
 
 func (c RefusalCode) rank() int {
