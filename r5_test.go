@@ -220,9 +220,11 @@ func TestMicELocatorSpaceIsJudgedOnWhatTheDecoderLifts(t *testing.T) {
 		{"two spaces then a later altitude", "\"4e}  y", "y", false},
 		{"three spaces then a later altitude", "\"4e}   y", " y", false},
 		{"two spaces, then an altitude, then text", "  \"4e}z", "z", false},
-		// Two spaces after telemetry left once a later altitude is lifted.
-		{"two spaces after telemetry left by an altitude", "|!:&0hl!Y[/>\"4e}='p|  y", "y", false},
-		{"one space after telemetry left by an altitude", "|!:&0hl!Y[/>\"4e}='p| z", "z", false},
+		// Telemetry an altitude splits is text, so nothing after it has its space.
+		{"two spaces after telemetry split by an altitude", "|!:&0hl!Y[/>\"4e}='p|  y", "|!:&0hl!Y[/>='p|  y", true},
+		{"one space after telemetry split by an altitude", "|!:&0hl!Y[/>\"4e}='p| z", "|!:&0hl!Y[/>='p| z", true},
+		// Two spaces after whole telemetry that follows a later altitude.
+		{"two spaces after telemetry after an altitude", "\"4e}|!:&0'p|  y", "y", false},
 		// Two spaces after the locator and telemetry.
 		{"two spaces after telemetry", "|!:&0'p|  y", "y", false},
 		{"three spaces after telemetry", "|!:&0'p|   y", " y", false},

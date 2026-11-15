@@ -704,13 +704,19 @@ func TestMicELocatorThenTelemetryThenASpacedCommentHasItsSpace(t *testing.T) {
 }
 
 // The locator's space is judged on the text after every lifted element is out: a later Mic-E
-// altitude, and the base-91 telemetry it leaves between the bars.
+// altitude, and whole base-91 telemetry after it. Telemetry the altitude splits is text.
 func TestMicELocatorSpaceAfterALaterAltitudeAndTheTelemetryItLeaves(t *testing.T) {
 	const telemetry = `!:&0hl!Y[/>` + `"4e}` + `='p`
-	for _, tc := range []struct{ name, status, comment string }{
-		{"spaced comment", "|" + telemetry + "| DG2MM", "DG2MM"},
-		{"nothing after the bars", "|" + telemetry + "|", ""},
-		{"altitude at the start of the bars", "|" + `"4e}!:&0hl!Y[/>='p` + "| DG2MM", "DG2MM"},
+	for _, tc := range []struct {
+		name, status, comment string
+		whole                 bool
+	}{
+		{"spaced comment", `"4e}|!:&0'p| DG2MM`, "DG2MM", true},
+		{"nothing after the bars", `"4e}|!:&0'p|`, "", true},
+		{"altitude between the locator and the bars", `"4e} |!:&0'p| DG2MM`, "DG2MM", true},
+		{"telemetry split by the altitude is text", "|" + telemetry + "| DG2MM", "|!:&0hl!Y[/>='p| DG2MM", false},
+		{"split telemetry, nothing after the bars", "|" + telemetry + "|", "|!:&0hl!Y[/>='p|", false},
+		{"altitude at the start of the bars", "|" + `"4e}!:&0hl!Y[/>='p` + "| DG2MM", "|!:&0hl!Y[/>='p| DG2MM", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			line := []byte("N0CALL>S32UVT:`(_fn\"Oj/`IO91/G" + tc.status)
@@ -718,14 +724,18 @@ func TestMicELocatorSpaceAfterALaterAltitudeAndTheTelemetryItLeaves(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
+			missing := false
 			for _, d := range p.Diagnostics {
 				if d.Code == aprs.CodeMissingSpaceAfterLocator {
-					t.Errorf("lenient gave %s", d.Code)
+					missing = true
 				}
+			}
+			if missing == tc.whole {
+				t.Errorf("missing-space-after-locator %v for whole telemetry %v", missing, tc.whole)
 			}
 			m := p.Data.(aprs.MicEReport)
 			eq(t, m.Fields.Comment, tc.comment)
-			if m.Fields.Telemetry == nil || m.Fields.AltitudeFeet == nil {
+			if m.Fields.AltitudeFeet == nil || (m.Fields.Telemetry != nil) != tc.whole {
 				t.Errorf("telemetry %v altitude %v", m.Fields.Telemetry, m.Fields.AltitudeFeet)
 			}
 		})

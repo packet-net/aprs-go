@@ -313,8 +313,9 @@ func micEStatus(ctx *context, report *MicEReport, b []byte, offset int) bool {
 	}
 
 	// An altitude later in the text, when none came first: a tolerated reading. Taking it out
-	// brings the bytes either side of it together, and a !DAO! across that join is not one.
-	joined := -1
+	// leaves a place nothing is read across: a !DAO!, telemetry, a PHG or another altitude is
+	// never made of the bytes either side of it. A strict decoder reads it as text.
+	t := newLiftedText(s)
 	if !firstOK {
 		for i := 0; i+3 < len(s); i++ {
 			if _, ok := micEAltitude(s[i:]); !ok {
@@ -323,21 +324,7 @@ func micEStatus(ctx *context, report *MicEReport, b []byte, offset int) bool {
 			if ctx.allows(CodeMicEAltitudeNotFirst, "a Mic-E altitude after other status text instead of first (APRS12c ch. 10)", offset+i) {
 				feet, _ := micEAltitude(s[i:])
 				report.Fields.AltitudeFeet = Ptr(feet)
-				s = drain(s, i, i+4)
-				joined = i
-			} else if joinsIntoAltitude(s) {
-				// The locator comes first in reading order: its space is judged on the text as it
-				// stands, nothing having been taken out of it here.
-				if judge != nil {
-					if _, ok := judge(withoutTelemetryAndDAO(s)); !ok {
-						return false
-					}
-				}
-				// Strictly the altitude is text and telemetry and the !DAO! are lifted as usual,
-				// unless what is left holds an altitude across a place one was taken from, which a
-				// lenient reader would then take: that reading is rejected (vectors README, Mic-E).
-				ctx.error(CodeMicEAltitudeNotFirst, "lifting telemetry and the !DAO! would join the status text into a Mic-E altitude (APRS12c ch. 10)", offset+i)
-				return false
+				t.lift(i, i+4, cutOther)
 			}
 			break
 		}
@@ -346,39 +333,12 @@ func micEStatus(ctx *context, report *MicEReport, b []byte, offset int) bool {
 	// A /A= in the text wins over the Mic-E bytes, even when it says the same: whether the text
 	// gave one is seen by letting it write into an empty field.
 	report.Fields.AltitudeFeet = nil
-	ok := commentTail(ctx, &report.Fields, s, offset, joined, judge)
+	ok := commentTail(ctx, &report.Fields, t, offset, judge)
 	report.AltitudeInComment = report.Fields.AltitudeFeet != nil
 	if !report.AltitudeInComment {
 		report.Fields.AltitudeFeet = altitudeBefore
 	}
 	return ok
-}
-
-// joinsIntoAltitude says whether the text left once base-91 telemetry and the !DAO! are lifted
-// out of s holds a Mic-E altitude, xxx}, across a place one was taken from.
-func joinsIntoAltitude(s []byte) bool {
-	rest := append([]byte(nil), s...)
-	// Spans come last first, so each join's place in what is left is its span's start less the
-	// lengths of the spans before it, taken out later.
-	spans := telemetryAndDAOSpans(s)
-	for _, r := range spans {
-		rest = drain(rest, r.start, r.end)
-	}
-	for _, r := range spans {
-		before := 0
-		for _, o := range spans {
-			if o.start < r.start {
-				before += o.length()
-			}
-		}
-		join := r.start - before
-		for j := max(join-3, 0); j < join; j++ {
-			if _, ok := micEAltitude(rest[j:]); ok {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // micEAltitude reads a Mic-E altitude, xxx}, at the start of s, in feet.
