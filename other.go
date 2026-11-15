@@ -707,9 +707,9 @@ func encodeOther(data Data) (forms, *EncodeError) {
 		// header of each, then its data (an enumeration out of its type, a number that is not one),
 		// in the Refusal reasons order.
 		p := &pending{}
-		for _, level := range levels {
-			p.note(thirdPartyHeader(level))
-		}
+		// Only the inner header of the packet being written is judged: a deeper level's header sits
+		// inside an information field, which is written as received.
+		p.note(thirdPartyHeader(levels[0]))
 		for _, level := range levels {
 			p.note(innerDataFault(level.Data))
 		}

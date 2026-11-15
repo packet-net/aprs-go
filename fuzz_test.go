@@ -64,6 +64,11 @@ func exercise(t *testing.T, p *aprs.Packet) {
 		if q.HasErrors() {
 			t.Fatalf("encoder output %q has strict errors: %v", info, q.Diagnostics)
 		}
+		if innerHasErrors(q.Data) {
+			// Written as received, a deeper third-party level whose defect only a lenient decoder
+			// tolerates reads as undecoded under Strict, which has nothing to encode.
+			return
+		}
 		again, err := aprs.Encode(q.Data)
 		if err != nil {
 			t.Fatalf("re-encode of %q refused: %v", info, err)
@@ -165,4 +170,19 @@ func FuzzBuilder(f *testing.F) {
 		check(me.Telemetry(uint16(off)).Analog(aprs.Ptr(lat), nil, aprs.Ptr(wx)).Bits("10101010").Comment(comment).Build())
 		check(me.TelemetryCoefficients(lat, lon, wx).Build())
 	})
+}
+
+// innerHasErrors says whether a third-party packet's inner packet, at any depth, decoded with an
+// error.
+func innerHasErrors(d aprs.Data) bool {
+	for {
+		tp, ok := d.(aprs.ThirdParty)
+		if !ok || tp.Packet == nil {
+			return false
+		}
+		if tp.Packet.HasErrors() {
+			return true
+		}
+		d = tp.Packet.Data
+	}
 }

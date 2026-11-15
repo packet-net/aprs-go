@@ -99,6 +99,30 @@ func Build(input map[string]any) Outcome {
 	// A non-integer in a whole-unit or code field (a PHG digit, a comment telemetry sequence or
 	// value) is outside what the field holds, never rounded: this builder takes whole codes, so the
 	// refusal is made here and a 0 stands in (vectors README, Read-back).
+	if v, ok := args["ambiguity"]; ok {
+		rest["ambiguity"] = codeValue(v, &pending, "ambiguity")
+		if n, whole := asNumber(rest["ambiguity"]); whole && (n < 0 || n > 255) && n == math.Trunc(n) {
+			rest["ambiguity"] = int64(0)
+			pending = append(pending, standIn{"value-out-of-range", "ambiguity is outside what the builder holds"})
+		}
+	}
+	if f, ok := args["frequency"].(map[string]any); ok {
+		fixed := make(map[string]any, len(f))
+		for k, v := range f {
+			fixed[k] = v
+		}
+		if v, ok := f["tone_value"]; ok {
+			fixed["tone_value"] = codeValue(v, &pending, "frequency.tone_value")
+		}
+		if v, ok := f["offset_khz"]; ok {
+			fixed["offset_khz"] = codeValue(v, &pending, "frequency.offset_khz")
+			if n, isNum := asNumber(fixed["offset_khz"]); isNum && (n < math.MinInt32 || n > math.MaxInt32) {
+				fixed["offset_khz"] = int64(0)
+				pending = append(pending, standIn{"value-out-of-range", "frequency.offset_khz is outside what the builder holds"})
+			}
+		}
+		rest["frequency"] = fixed
+	}
 	if p, ok := args["phg"].(map[string]any); ok {
 		rest["phg"] = codeFields(p, &pending, "phg.")
 	}
