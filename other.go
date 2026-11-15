@@ -672,6 +672,7 @@ func encodeOther(data Data) (forms, *EncodeError) {
 		// Walk the chain iteratively, counting levels before anything else is looked at: a
 		// caller-built chain thousands deep is refused without recursion.
 		depth := 0
+		var levels []*Packet
 		for cur := Data(d); ; {
 			var tp ThirdParty
 			switch x := cur.(type) {
@@ -696,16 +697,29 @@ func encodeOther(data Data) (forms, *EncodeError) {
 			if tp.Packet == nil {
 				break
 			}
+			levels = append(levels, tp.Packet)
 			cur = tp.Packet.Data
 		}
 		if d.Packet == nil {
 			return forms{}, newEncodeError(RefusalMissingField, "a third-party packet carries a packet")
 		}
-		if err := thirdPartyHeader(d.Packet); err != nil {
+		// Every rule check applies to the inner packets at every depth, as to top-level data: the
+		// header of each, then its data (an enumeration out of its type, a number that is not one),
+		// in the Refusal reasons order.
+		p := &pending{}
+		for _, level := range levels {
+			p.note(thirdPartyHeader(level))
+		}
+		for _, level := range levels {
+			p.note(innerDataFault(level.Data))
+		}
+		if err := p.finish(); err != nil {
 			return forms{}, err
 		}
 		out = append(out, '}')
-		line, lineErr := d.Packet.tnc2Line()
+		// The inner header is written inside the information field and read back by the
+		// third-party rules, which let a source be any 1-9 printable characters.
+		line, lineErr := d.Packet.writeLine(1)
 		if lineErr != nil {
 			return forms{}, newEncodeError(RefusalInvalidThirdPartyHeader, "the third-party packet's header cannot be written: "+lineErr.message)
 		}
@@ -823,16 +837,8 @@ func thirdPartyHeader(p *Packet) *EncodeError {
 	if !isValidAddress(p.Destination.text) || !pathOK {
 		return newEncodeError(RefusalInvalidThirdPartyHeader, "a third-party destination and path entries are addresses: 1-9 letters, digits or -")
 	}
-	last := -1
-	for i, e := range p.Path {
-		if e.Used {
-			last = i
-		}
-	}
-	for i := 0; i < last; i++ {
-		if !p.Path[i].Used {
-			return newEncodeError(RefusalInvalidThirdPartyHeader, "a used path entry after one that is not used cannot be written in TNC2 form")
-		}
+	if pathOutOfOrder(p.Path) {
+		return newEncodeError(RefusalInvalidThirdPartyHeader, "a path entry not marked used before one that is reads back used: it cannot be written")
 	}
 	for _, d := range p.Diagnostics {
 		if isHeaderDefect(d.Code) {

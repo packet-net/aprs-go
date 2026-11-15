@@ -411,37 +411,34 @@ func decodeWithContext(ctx *context, source, destination Address, path []PathEnt
 // NewPacket builds a packet from data, encoding its information field. For Mic-E data the
 // destination address is worked out from the report (it carries the latitude, message code and
 // digipeat path, APRS12c ch. 10), and destination is not used. An empty address (the zero
-// Address) is refused with RefusalInvalidAddress. The information field is read back as Encode's
-// is. The header is written, and read back, by TNC2, TNC2Line, AX25 and KISS, which refuse a path
-// with an entry not marked used before one that is. data may also be a pointer to one of the data
+// Address) is refused with RefusalInvalidAddress, and a path with an entry not marked used before
+// one that is with RefusalInvalidPath, both before any fault of the data. The information field is
+// read back as Encode's is. The header is written, and read back, by TNC2, TNC2Line, AX25 and
+// KISS, which refuse what their form cannot carry. data may also be a pointer to one of the data
 // types. A refusal is an *EncodeError.
 func NewPacket(source, destination Address, path []PathEntry, data Data) (*Packet, error) {
-	p, err := newPacket(source, destination, path, data)
+	p, err := newPacket(source, destination, path, data, false)
 	if err != nil {
 		return nil, err
 	}
 	return p, nil
 }
 
-func newPacket(source, destination Address, path []PathEntry, data Data) (*Packet, *EncodeError) {
+func newPacket(source, destination Address, path []PathEntry, data Data, bytesFirst bool) (*Packet, *EncodeError) {
 	data, err := prepare(data)
 	if err != nil {
 		return nil, err
 	}
 	pend := &pending{}
-	// The zero Address is empty, which no header can carry.
+	// The header given is judged first, whatever form it is written in, before any data fault:
+	// an address that is not one (the zero Address is empty, which no header can carry), then a
+	// path with an entry not marked used before one that is.
 	_, micE := data.(MicEReport)
-	empty := source.text == "" || (destination.text == "" && !micE)
-	for _, e := range path {
-		empty = empty || e.Address.text == ""
-	}
-	if empty {
-		pend.note(newEncodeError(RefusalInvalidAddress, "a header address is empty: give the source, destination and each path entry an address"))
-	}
+	pend.note(headerFault(source, destination, path, micE, nil))
 	// The information field comes only from encodeInformation, which ends in the read-back; for
 	// Mic-E it also computes the destination.
 	var information []byte
-	if info, computed, err := encodeInformation(data, true); pend.run(err) {
+	if info, computed, err := encodeInformation(data, encodeOptions{micE: true, bytesFirst: bytesFirst}); pend.run(err) {
 		information = info
 		if micE {
 			destination = computed
@@ -495,32 +492,51 @@ func (p *Packet) QConstruct() (QConstruct, bool) {
 	return QConstruct{}, false
 }
 
-// TNC2 gives the packet as a TNC2 text line (without a line ending). The last used path entry is
-// marked *. It writes the packet's information field as it stands, whatever its length: it is not
-// an encoder, so the 256-byte limit does not apply to it (see Encode). The header it writes is
-// read back, as every write is: it gives nil for a packet whose header a line cannot carry (a
-// path with an entry not marked used before one that is, which would read back used; an address a
-// header cannot hold). TNC2Line says why.
-func (p *Packet) TNC2() []byte {
-	line, err := p.tnc2Line()
-	if err != nil {
-		return nil
+// headerFault is the fault of a header as given, whatever form it is written in: an address that
+// is not one (invalid-address; the zero Address is empty, which no header can carry), then a path
+// with an entry not marked used before one that is, which reads back used in a line and in a
+// frame alike and which no decoder gives (invalid-path). It comes before any fault of the data.
+// An empty destination is no fault where the packet itself carries the empty-destination warning
+// (carries says so; nil for a header just given), or for Mic-E, whose destination is computed.
+func headerFault(source, destination Address, path []PathEntry, micE bool, carries func(Code) bool) *EncodeError {
+	switch {
+	case !isValidAddress(source.text):
+		return newEncodeError(RefusalInvalidAddress, "the source is not an address: give it 1-9 letters, digits or - (an empty one cannot be written)")
+	case destination.text == "" && !micE && (carries == nil || !carries(CodeEmptyDestination)):
+		return newEncodeError(RefusalInvalidAddress, "the destination address is empty: give one")
+	case destination.text != "" && !micE && !isValidAddress(destination.text):
+		return newEncodeError(RefusalInvalidAddress, "the destination is not an address: 1-9 letters, digits or -")
 	}
-	return line
+	for _, e := range path {
+		if !isValidAddress(e.Address.text) {
+			return newEncodeError(RefusalInvalidAddress, "a path entry is not an address: 1-9 letters, digits or - (an empty one cannot be written)")
+		}
+	}
+	if pathOutOfOrder(path) {
+		return newEncodeError(RefusalInvalidPath, "a path entry not marked used comes before one that is, which reads back used: mark it used or the later one unused")
+	}
+	return nil
 }
 
-// TNC2Line is TNC2 with the reason a line cannot be written: an *EncodeError, tnc2-cannot-carry
-// for a path with an entry not marked used before one that is, or invalid-address for an address
-// a header cannot hold.
-func (p *Packet) TNC2Line() ([]byte, error) {
-	line, err := p.tnc2Line()
-	if err != nil {
-		return nil, err
+// pathOutOfOrder says whether an entry not marked used comes before one that is.
+func pathOutOfOrder(path []PathEntry) bool {
+	last := -1
+	for i, e := range path {
+		if e.Used {
+			last = i
+		}
 	}
-	return line, nil
+	for i := 0; i < last; i++ {
+		if !path[i].Used {
+			return true
+		}
+	}
+	return false
 }
 
-func (p *Packet) tnc2Line() ([]byte, *EncodeError) {
+// headerText is the header as a TNC2 line writes it, SOURCE>DESTINATION,PATH: with * on the last
+// used entry only, as held, with no check.
+func (p *Packet) headerText() []byte {
 	head := make([]byte, 0, 32+len(p.Information))
 	head = append(head, p.Source.text...)
 	head = append(head, '>')
@@ -538,25 +554,75 @@ func (p *Packet) tnc2Line() ([]byte, *EncodeError) {
 			head = append(head, '*')
 		}
 	}
-	head = append(head, ':')
+	return append(head, ':')
+}
+
+// TNC2 gives the packet as a TNC2 text line (without a line ending). The last used path entry is
+// marked *. It writes the packet's information field as it stands, whatever its length: it is not
+// an encoder, so the 256-byte limit does not apply to it (see Encode), and a hand-changed Packet
+// is written as it stands. The header it writes is read back, as every write is, and a line is
+// refused where it could not be read back as the packet held: it gives nil for a header a line
+// cannot carry (an address that is not one, a path with an entry not marked used before one that
+// is) and for an information field with a CR or LF inside it, which would end the line there (one
+// at the very end is carried). TNC2Line says why. Use String to look at a packet, not to send it.
+func (p *Packet) TNC2() []byte {
+	line, err := p.writeLine(0)
+	if err != nil {
+		return nil
+	}
+	return line
+}
+
+// TNC2Line is TNC2 with the reason a line cannot be written: an *EncodeError, invalid-address for
+// an address a header cannot hold, invalid-path for a path with an entry not marked used before
+// one that is, or tnc2-cannot-carry for an information field with a CR or LF inside it.
+func (p *Packet) TNC2Line() ([]byte, error) {
+	line, err := p.writeLine(0)
+	if err != nil {
+		return nil, err
+	}
+	return line, nil
+}
+
+// writeLine writes the packet as a line, header read back. At depth 0 it is a line on its own: the
+// header is read back by the outer rules whatever the packet's origin (an inner third-party packet
+// written on its own, with a source such as "a b", is invalid-address), and a CR or LF inside the
+// information field is tnc2-cannot-carry, last. At depth 1 it is the inner header of a third-party
+// packet written inside an information field: read back by the third-party rules, and the field
+// is judged as part of the outer one.
+func (p *Packet) writeLine(depth int) ([]byte, *EncodeError) {
+	if depth == 0 {
+		if err := headerFault(p.Source, p.Destination, p.Path, false, p.carries); err != nil {
+			return nil, err
+		}
+	}
+	head := p.headerText()
 	// The header written is read back: decoded under an empty information field, it must give the
 	// source, destination and path (each used entry used) this packet has.
-	depth := 0
-	if p.ThirdParty {
-		depth = 1
-	}
 	back, herr := decodeTNC2Line(head, Lenient, depth)
-	if err := checkHeaderBack(p, back, herr, RefusalTNC2CannotCarry); err != nil {
+	if err := checkHeaderBack(p, back, herr); err != nil {
 		return nil, err
+	}
+	if depth == 0 && hasInnerLineBreak(p.Information) {
+		return nil, newEncodeError(RefusalTNC2CannotCarry, "a CR or LF inside the information field would end the line there: a line carries one only at its very end")
 	}
 	return append(head, p.Information...), nil
 }
 
+// hasInnerLineBreak says whether an information field has a CR or LF before its trailing line
+// break, which a decoder takes off the end.
+func hasInnerLineBreak(info []byte) bool {
+	end := len(info)
+	for end > 0 && (info[end-1] == '\r' || info[end-1] == '\n') {
+		end--
+	}
+	return hasLineBreak(info[:end])
+}
+
 // checkHeaderBack compares a packet's header with what the bytes written for it decode to: the
 // same source, destination and path, entry by entry, each used exactly when it is, and no
-// diagnostic. A decode that is not clean for an address the header cannot hold is invalid-address;
-// a path whose entry not marked used comes before one that is (it reads back used) is anomaly.
-func checkHeaderBack(p *Packet, back *Packet, herr *HeaderError, anomaly RefusalCode) *EncodeError {
+// diagnostic the packet does not itself carry.
+func checkHeaderBack(p *Packet, back *Packet, herr *HeaderError) *EncodeError {
 	if herr != nil {
 		return newEncodeError(RefusalInvalidAddress, "the header written does not read back: "+herr.Error())
 	}
@@ -581,7 +647,7 @@ func checkHeaderBack(p *Packet, back *Packet, herr *HeaderError, anomaly Refusal
 	}
 	for i, e := range back.Path {
 		if e.Used != p.Path[i].Used {
-			return newEncodeError(anomaly, "a path entry not marked used comes before one that is, which reads back used: it cannot be carried")
+			return newEncodeError(RefusalInvalidPath, "a path entry not marked used comes before one that is, which reads back used")
 		}
 	}
 	return nil
@@ -597,16 +663,22 @@ func (p *Packet) carries(code Code) bool {
 	return false
 }
 
-// String gives the TNC2 line as text.
+// String gives the packet as text for display or debugging, as it is held: the header with * on
+// the last used entry, then the information field exactly as stored. It is not a writer: it is
+// total, never refuses and is not read back, so what it shows may be a line no writer would give.
+// To send a packet use TNC2Line, AX25 or KISS, which read the header back and refuse what they
+// cannot carry.
 func (p *Packet) String() string {
-	return string(p.TNC2())
+	return string(append(p.headerText(), p.Information...))
 }
 
 // AX25 gives the packet as an AX.25 UI frame in KISS form (no flags, no FCS). It fails, with an
-// *EncodeError, if an address cannot be sent over the air, the path is longer than 8 entries, or
-// the path has an entry not marked used before one that is (which would read back used). It
-// writes the information field as it stands, whatever its length: it is not an encoder, so the
-// 256-byte limit does not apply to it (see Encode).
+// *EncodeError, for a header fault (an address that is not one, invalid-address; a path with an
+// entry not marked used before one that is, which would read back used, invalid-path) and, as
+// ax25-cannot-carry, for what a frame cannot hold: a call over 6 characters or in lower case, an
+// SSID a frame cannot hold, an empty destination, more than 8 path entries. It writes the
+// information field as it stands, whatever its length: it is not an encoder, so the 256-byte limit
+// does not apply to it (see Encode); a frame carries a CR or LF inside the field.
 func (p *Packet) AX25() ([]byte, error) {
 	out, err := p.ax25()
 	if err != nil {
@@ -616,6 +688,9 @@ func (p *Packet) AX25() ([]byte, error) {
 }
 
 func (p *Packet) ax25() ([]byte, *EncodeError) {
+	if err := headerFault(p.Source, p.Destination, p.Path, false, p.carries); err != nil {
+		return nil, err
+	}
 	if len(p.Path) > 8 {
 		return nil, newEncodeError(RefusalAX25CannotCarry, "an AX.25 frame has room for at most 8 digipeaters")
 	}
@@ -641,8 +716,8 @@ func (p *Packet) ax25() ([]byte, *EncodeError) {
 	// The addresses written are read back, as a line's header is: a frame is read as a line is, an
 	// entry used when its H bit is set or it comes before one that is.
 	back, herr := decodeAX25(out, Lenient)
-	if err := checkHeaderBack(p, back, herr, RefusalAX25CannotCarry); err != nil {
-		if err.code == RefusalInvalidAddress || err.code == RefusalDoesNotReadBack {
+	if err := checkHeaderBack(p, back, herr); err != nil {
+		if err.code != RefusalInvalidPath && err.code != RefusalInvalidAddress {
 			// What a frame cannot hold is its own refusal.
 			err = newEncodeError(RefusalAX25CannotCarry, err.message)
 		}
@@ -740,8 +815,9 @@ func ax25Address(ctx *context, b []byte, offset int, role addressRole) (Address,
 
 func writeAX25Address(out []byte, a Address, flags byte) ([]byte, *EncodeError) {
 	if a.text == "" {
-		// An empty address is six spaces; the read-back decides whether the packet may carry it.
-		return append(out, ' '<<1, ' '<<1, ' '<<1, ' '<<1, ' '<<1, ' '<<1, flags), nil
+		// A frame never carries an empty address, which a header given as received may hold (an
+		// empty destination, read with a warning): no frame AX.25 allows reads back as one.
+		return out, newEncodeError(RefusalAX25CannotCarry, "an AX.25 frame cannot carry an empty address")
 	}
 	if !a.IsAX25() {
 		return out, newEncodeError(RefusalAX25CannotCarry, fmt.Sprintf("'%s' cannot be sent in an AX.25 frame: 1-6 upper-case letters and digits, SSID 0-15", a.text))

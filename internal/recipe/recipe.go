@@ -96,6 +96,23 @@ func Build(input map[string]any) Outcome {
 		delete(rest, "ambiguity")
 		pending = append(pending, standIn{"not-a-number", "ambiguity is not a number"})
 	}
+	// A non-integer in a whole-unit or code field (a PHG digit, a comment telemetry sequence or
+	// value) is outside what the field holds, never rounded: this builder takes whole codes, so the
+	// refusal is made here and a 0 stands in (vectors README, Read-back).
+	if p, ok := args["phg"].(map[string]any); ok {
+		rest["phg"] = codeFields(p, &pending, "phg.")
+	}
+	if t, ok := args["telemetry"].(map[string]any); ok && input["report"] != "telemetry" {
+		fixed := codeFields(t, &pending, "telemetry.")
+		if list, ok := t["analog"].([]any); ok {
+			values := make([]any, len(list))
+			for i, v := range list {
+				values[i] = codeValue(v, &pending, "telemetry.analog")
+			}
+			fixed["analog"] = values
+		}
+		rest["telemetry"] = fixed
+	}
 	switch input["report"] {
 	case "telemetry":
 		if c, why := sequenceFault(args["sequence"]); c != "" {
@@ -129,6 +146,37 @@ func Build(input map[string]any) Outcome {
 		return r
 	}
 	return Outcome{Refusal: first.code, Reason: first.reason, Tool: true}
+}
+
+// codeFields copies an object with each number that is not a whole number replaced by 0, noting
+// the refusal it makes (not-a-number for NaN or an infinity, else value-out-of-range).
+func codeFields(o map[string]any, pending *[]standIn, at string) map[string]any {
+	out := make(map[string]any, len(o))
+	for k, v := range o {
+		out[k] = v
+		if _, isList := v.([]any); isList {
+			continue
+		}
+		out[k] = codeValue(v, pending, at+k)
+	}
+	return out
+}
+
+// codeValue is v, or a 0 standing in for a number that is not whole.
+func codeValue(v any, pending *[]standIn, name string) any {
+	f, ok := v.(float64)
+	if !ok {
+		return v
+	}
+	switch {
+	case math.IsNaN(f) || math.IsInf(f, 0):
+		*pending = append(*pending, standIn{"not-a-number", name + " is not a number"})
+		return int64(0)
+	case f != math.Trunc(f):
+		*pending = append(*pending, standIn{"value-out-of-range", name + " is not a whole number"})
+		return int64(0)
+	}
+	return v
 }
 
 // sequenceFault says what refuses a telemetry sequence the builder cannot take: not-a-number for

@@ -357,17 +357,29 @@ func TestTheHeaderWrittenIsReadBack(t *testing.T) {
 		t.Errorf("frame: %v %v %v", heard, err, heard.Diagnostics)
 	}
 	for _, path := range [][]string{{"WIDE1-1", "N0CALL-1*"}, {"N0CALL-1", "WIDE1-1", "WIDE2-1*"}} {
-		bad := build(st(path...))
-		if line, err := bad.TNC2Line(); err == nil || refusal(t, err) != aprs.RefusalTNC2CannotCarry {
+		// A path with an entry not marked used before one that is is a fault of the header given:
+		// invalid-path when it is built, before any data fault, in every form.
+		_, err := st(path...).Status("hi").Build()
+		if err == nil || refusal(t, err) != aprs.RefusalInvalidPath {
+			t.Errorf("%v built: %v", path, err)
+		}
+		_, err = st(path...).Object("a name that is too long").At(51.5, -0.1).Build()
+		if err == nil || refusal(t, err) != aprs.RefusalInvalidPath {
+			t.Errorf("%v built with a data fault: %v", path, err)
+		}
+		// And the writers refuse a packet whose path is changed by hand after it was built.
+		bad := build(st("WIDE1-1*", "N0CALL-1*"))
+		bad.Path = []aprs.PathEntry{{Address: aprs.MustAddress(strings.TrimSuffix(path[0], "*"))}, {Address: aprs.MustAddress(strings.TrimSuffix(path[len(path)-1], "*")), Used: true}}
+		if line, err := bad.TNC2Line(); err == nil || refusal(t, err) != aprs.RefusalInvalidPath {
 			t.Errorf("%v as a line: %q, %v", path, line, err)
 		}
 		if bad.TNC2() != nil {
 			t.Errorf("%v: TNC2 gave bytes", path)
 		}
-		if f, err := bad.AX25(); err == nil || refusal(t, err) != aprs.RefusalAX25CannotCarry {
+		if f, err := bad.AX25(); err == nil || refusal(t, err) != aprs.RefusalInvalidPath {
 			t.Errorf("%v as a frame: %x, %v", path, f, err)
 		}
-		if _, err := bad.KISS(0); err == nil || refusal(t, err) != aprs.RefusalAX25CannotCarry {
+		if _, err := bad.KISS(0); err == nil || refusal(t, err) != aprs.RefusalInvalidPath {
 			t.Errorf("%v as KISS: %v", path, err)
 		}
 	}

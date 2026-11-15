@@ -53,8 +53,8 @@ func (s Station) To(destination string) (Station, error) {
 // any set before. An entry ending in * is a used one, as in the neutral header form and a TNC2
 // line (Via("WIDE1-1*", "N0CALL-1*", "WIDE2-1")): the * is never part of the address. A path with
 // an entry not marked used before one that is cannot be written (a TNC2 line or an AX.25 frame
-// would read it back used) and is refused when the packet is written. On an error it gives the
-// station unchanged.
+// would read it back used) and is refused as invalid-path when the packet is built, before any
+// fault of the data. On an error it gives the station unchanged.
 func (s Station) Via(path ...string) (Station, error) {
 	entries := make([]PathEntry, 0, len(path))
 	for _, p := range path {
@@ -349,7 +349,7 @@ func (b PositionBuilder) Data() (Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	return refuseMissing(d, b.common.symbol == nil)
+	return refuseMissing(d, b.common.symbol == nil, false)
 }
 
 func (b PositionBuilder) data() (Data, error) {
@@ -398,7 +398,7 @@ func (b ObjectBuilder) Data() (Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	return refuseMissing(d, b.common.symbol == nil || b.timestamp == nil)
+	return refuseMissing(d, b.common.symbol == nil || b.timestamp == nil, false)
 }
 
 func (b ObjectBuilder) data() (Data, error) {
@@ -439,7 +439,7 @@ func (b ItemBuilder) Data() (Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	return refuseMissing(d, b.common.symbol == nil)
+	return refuseMissing(d, b.common.symbol == nil, false)
 }
 
 func (b ItemBuilder) data() (Data, error) {
@@ -483,7 +483,7 @@ func (b MicEBuilder) Data() (Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	return refuseMissing(d, b.common.symbol == nil)
+	return refuseMissing(d, b.common.symbol == nil, true)
 }
 
 func (b MicEBuilder) data() (Data, error) {
@@ -501,7 +501,7 @@ func (b MicEBuilder) data() (Data, error) {
 			rest := fields
 			rest.AltitudeFeet = nil
 			typeCode := '\''
-			if _, _, other := encodeInformation(MicEReport{MicEMessage: b.micEMessage, TypeCode: &typeCode, Fields: rest}, true); other != nil && other.code.rank() < fault.code.rank() {
+			if _, _, other := encodeInformation(MicEReport{MicEMessage: b.micEMessage, TypeCode: &typeCode, Fields: rest}, encodeOptions{micE: true, bytesFirst: true}); other != nil && other.code.rank() < fault.code.rank() {
 				return nil, other
 			}
 			return nil, fault
@@ -516,14 +516,16 @@ func (b MicEBuilder) data() (Data, error) {
 		MicEMessage: b.micEMessage,
 		TypeCode:    &typeCode,
 		Fields:      fields,
-		bytesFirst:  true,
 	}, nil
 }
 
 // Build gives the packet: the station's source and path, the destination this report computes,
 // and the report. An altitude, in either unit, goes in the Mic-E altitude bytes, rounded to the
 // nearest metre.
-func (b MicEBuilder) Build() (*Packet, error) { return build(b.station, b.data) }
+func (b MicEBuilder) Build() (*Packet, error) {
+	// The altitude goes in the Mic-E bytes first: said as an argument, not by a mark on the data.
+	return buildPacket(b.station, b.data, true, true)
+}
 
 // WeatherBuilder builds a weather report, from Station.Weather (APRS12c ch. 12). With a position
 // it is a position report with the weather station symbol; without, a positionless weather
@@ -683,7 +685,7 @@ func (b WeatherBuilder) Data() (Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	return refuseMissing(d, b.position == nil && b.timestamp == nil)
+	return refuseMissing(d, b.position == nil && b.timestamp == nil, false)
 }
 
 func (b WeatherBuilder) data() (Data, error) {
@@ -866,12 +868,12 @@ func (b TelemetryBuilder) Build() (*Packet, error) { return build(b.station, b.D
 // no timestamp): it names the refusal the encoder gives it, at its place in the order, so Data
 // refuses what Build refuses. Build itself uses the unchecked data, so the header's faults and
 // these rank together in the packet's own check.
-func refuseMissing(d Data, missing bool) (Data, error) {
+func refuseMissing(d Data, missing bool, bytesFirst bool) (Data, error) {
 	if !missing {
 		return d, nil
 	}
 	if m, ok := d.(MicEReport); ok {
-		if _, _, err := encodeInformation(m, true); err != nil {
+		if _, _, err := encodeInformation(m, encodeOptions{micE: true, bytesFirst: bytesFirst}); err != nil {
 			return nil, err
 		}
 		return d, nil
@@ -883,15 +885,31 @@ func refuseMissing(d Data, missing bool) (Data, error) {
 }
 
 func build(s Station, data func() (Data, error)) (*Packet, error) {
-	d, err := data()
-	if err != nil {
-		return nil, err
-	}
-	return s.packet(d)
+	return buildPacket(s, data, false, false)
 }
 
-// String gives the station's header, such as M0LTE-9>APZ001,WIDE1-1, with a * on the last used
-// path entry as a TNC2 line has it.
+// buildPacket is build, said what the builder tells the encoder: micE for a Mic-E report, which
+// computes its destination, and bytesFirst for its altitude in the Mic-E bytes first. The header
+// given is judged before the data, even before a fault the builder itself finds in it.
+func buildPacket(s Station, data func() (Data, error), micE, bytesFirst bool) (*Packet, error) {
+	d, err := data()
+	if err != nil {
+		if herr := headerFault(s.source, s.destination, s.path, micE, nil); herr != nil {
+			return nil, herr
+		}
+		return nil, err
+	}
+	p, perr := newPacket(s.source, s.destination, s.path, d, bytesFirst)
+	if perr != nil {
+		return nil, perr
+	}
+	return p, nil
+}
+
+// String gives the station's header as text for display, such as M0LTE-9>APZ001,WIDE1-1, with a
+// * on the last used path entry as a TNC2 line has it. It is not a writer: it is total and never
+// refuses, so for a path no packet will write (an entry not marked used before one that is, which
+// Build refuses as invalid-path) it still shows the path as held.
 func (s Station) String() string {
 	var sb strings.Builder
 	sb.WriteString(s.source.text)

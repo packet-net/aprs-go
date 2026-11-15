@@ -57,6 +57,9 @@ type mismatch struct {
 	what string
 	// paths are the neutral keys whose values differ, empty when a diagnostic is what is wrong.
 	paths []string
+	// innerNotCarried: a third-party packet's inner packet is given a warning or error that its
+	// written bytes do not read back with.
+	innerNotCarried bool
 }
 
 // readBack is the final check: it returns the first of the forms whose bytes read back as data,
@@ -80,11 +83,19 @@ func readBack(data Data, f forms) ([]byte, Address, *EncodeError) {
 }
 
 // allowedInfo says whether the read-back accepts an info the decode gives: only those the rules
-// attach to the form the data itself asks for.
-func allowedInfo(c Code) bool {
-	switch c {
-	case CodeObsoleteFormat, CodeMicEMissingDeviceType, CodeInvalidQuery, CodeInvalidTelemetryMetadata:
-		return true
+// attach to the form the data given itself asks for, each tied to its own form (an info listed for
+// one form is not accepted on another): obsolete-format on a positionless weather report, raw
+// weather, raw NMEA, a Maidenhead beacon and Mic-E Rev 0 telemetry; mic-e-missing-device-type on
+// Mic-E status text with no type code; invalid-query and invalid-telemetry-metadata on a message
+// whose text the rules read as a plain message with that info.
+func allowedInfo(c Code, data Data) bool {
+	switch d := derefData(data).(type) {
+	case WeatherReport, RawWeather, NMEA, MaidenheadBeacon:
+		return c == CodeObsoleteFormat
+	case MicEReport:
+		return (c == CodeObsoleteFormat && len(d.LegacyTelemetry) > 0) || (c == CodeMicEMissingDeviceType && d.TypeCode == nil)
+	case Message:
+		return c == CodeInvalidQuery || c == CodeInvalidTelemetryMetadata
 	}
 	return false
 }
@@ -102,7 +113,7 @@ func readsBack(data Data, b []byte, f forms) *mismatch {
 	ctx := newContext(Lenient)
 	back := decodeInformation(ctx, destination, b)
 	for _, d := range ctx.diagnostics {
-		if d.Severity != Info || !allowedInfo(d.Code) {
+		if d.Severity != Info || !allowedInfo(d.Code, data) {
 			return &mismatch{what: "it decodes with " + d.Severity.String() + " " + d.Code.ID() + ": " + d.Message}
 		}
 	}
@@ -115,7 +126,49 @@ func readsBack(data Data, b []byte, f forms) *mismatch {
 	if len(paths) == 0 {
 		return nil
 	}
-	return &mismatch{what: "it reads back with a different " + strings.TrimPrefix(paths[0], "."), paths: paths}
+	return &mismatch{what: "it reads back with a different " + strings.TrimPrefix(paths[0], "."), paths: paths, innerNotCarried: innerGivenNotCarried(want, got)}
+}
+
+// innerGivenNotCarried says whether, at any depth, the inner packet is given a warning or error
+// (after innerDiagnostics, the lists hold only those) that the decode of the bytes written lacks.
+func innerGivenNotCarried(want, got map[string]any) bool {
+	for want != nil {
+		wp, _ := want["packet"].(map[string]any)
+		if wp == nil {
+			return false
+		}
+		var gp map[string]any
+		if got != nil {
+			gp, _ = got["packet"].(map[string]any)
+		}
+		given := map[string]int{}
+		if list, ok := wp["diagnostics"].([]any); ok {
+			for _, d := range list {
+				s, _ := d.(string)
+				given[s]++
+			}
+		}
+		if gp != nil {
+			if list, ok := gp["diagnostics"].([]any); ok {
+				for _, d := range list {
+					s, _ := d.(string)
+					given[s]--
+				}
+			}
+		}
+		for _, n := range given {
+			if n > 0 {
+				return true
+			}
+		}
+		want, _ = wp["data"].(map[string]any)
+		if gp != nil {
+			got, _ = gp["data"].(map[string]any)
+		} else {
+			got = nil
+		}
+	}
+	return false
 }
 
 // innerDiagnostics leaves a third-party packet's inner diagnostics, which are part of its data, as
@@ -234,7 +287,18 @@ func refusalFor(data Data, m *mismatch) *EncodeError {
 			return newEncodeError(RefusalInvalidAddressee, "an addressee of NWS-, NWS_ or BLN and a bulletin form makes a bulletin, not this report")
 		}
 	}
-	if holdsFreeText(neutralData(data)) && !onlyPosition(m.paths) {
+	// A rule the data breaks names the fault before the read-back's own codes: the rules of a
+	// third-party packet's inner data too, at every depth.
+	if tp, ok := derefData(data).(ThirdParty); ok && tp.Packet != nil {
+		if err := innerRuleFault(tp.Packet.Data); err != nil {
+			return err
+		}
+	}
+	// An inner warning or error given that the bytes do not carry has no form.
+	if m.innerNotCarried {
+		return newEncodeError(RefusalValueHasNoForm, "a third-party packet's inner packet is given a warning or error that its written bytes do not read back with: no form carries it")
+	}
+	if holdsFreeText(neutralData(data)) && (len(m.paths) == 0 || textChanged(m.paths)) {
 		return newEncodeError(RefusalTextReadsAsField, "text in the data reads back as something else: a structured element (altitude, !DAO!, telemetry, frequency, PHG/RNG/DFS, braces, a timestamp, locator or weather field) or an ack, query or bulletin; "+m.what)
 	}
 	return newEncodeError(RefusalDoesNotReadBack, "the bytes written do not read back as the data given: "+m.what)
@@ -274,19 +338,18 @@ func holdsFreeText(v any) bool {
 	return false
 }
 
-// onlyPosition says whether the keys that differ are all the position's own, which no text can
-// change.
-func onlyPosition(paths []string) bool {
-	if len(paths) == 0 {
-		return false
-	}
+// textChanged says whether free text is what reads back changed: some key that differs is a free
+// text field of the data (the text itself, or a field the text turned into or lost), not only
+// the position, a diagnostic or a number. (A decode that differs in no key but gives a warning of
+// its own is the text read as something else too, where the data holds free text.)
+func textChanged(paths []string) bool {
 	for _, p := range paths {
 		last := p[strings.LastIndexByte(p, '.')+1:]
-		if last != "latitude" && last != "longitude" && last != "ambiguity" {
-			return false
+		if freeTextKeys[last] || last == "type" {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 // ---- what the bytes carry: the data given, rounded as the form written holds it

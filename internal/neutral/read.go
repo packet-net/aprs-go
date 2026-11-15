@@ -162,7 +162,7 @@ func (c *collector) first() *Unreadable {
 
 // refusalOrder is the README's Refusal reasons order.
 var refusalOrder = []string{
-	"not-encodable", "invalid-address", "invalid-third-party-header",
+	"not-encodable", "invalid-address", "invalid-path", "invalid-third-party-header",
 	"invalid-addressee", "invalid-name", "invalid-timestamp", "not-a-number", "value-out-of-range", "value-has-no-form",
 	"invalid-code", "invalid-symbol", "invalid-character", "too-long", "padding-space", "malformed", "invalid-message-id",
 	"invalid-nmea", "extension-conflict", "field-not-allowed", "symbol-mismatch", "missing-field", "value-given-twice",
@@ -354,6 +354,21 @@ func integerOf[T integer](k *keys, key string) (*T, *Unreadable) {
 	if n, ok := whole(v); ok {
 		if t, ok := fits[T](n); ok {
 			return &t, nil
+		}
+	}
+	// A number that is not whole is outside what a whole-unit or code field holds: it is never
+	// rounded (vectors README, Read-back). This package's integers cannot hold it, so the
+	// refusal is made here, with 0 as the stand-in so the rest of the data is still checked.
+	if x, ok := asFloat(v); ok {
+		if math.IsNaN(x) || math.IsInf(x, 0) {
+			k.c.note(aprs.RefusalNotANumber, k.name(key)+": not a number")
+			var zero T
+			return &zero, nil
+		}
+		if x != math.Trunc(x) {
+			k.c.note(aprs.RefusalValueOutOfRange, k.name(key)+": not a whole number")
+			var zero T
+			return &zero, nil
 		}
 	}
 	return nil, unsupported("%s: not a whole number in the range this package holds", k.name(key))
@@ -1434,6 +1449,15 @@ func readPositioned(o *keys) (aprs.Positioned, *Unreadable) {
 		}
 		for _, x := range a {
 			n, ok := whole(x)
+			if !ok {
+				if y, isNum := asFloat(x); isNum && (math.IsNaN(y) || math.IsInf(y, 0)) {
+					o.c.note(aprs.RefusalNotANumber, "telemetry.analog: not a number")
+					n, ok = 0, true
+				} else if isNum {
+					o.c.note(aprs.RefusalValueOutOfRange, "telemetry.analog: not a whole number")
+					n, ok = 0, true
+				}
+			}
 			if !ok || n < 0 || n > 65535 {
 				return f, unsupported("telemetry.analog: each is a whole number, 0-65535")
 			}
@@ -1596,11 +1620,9 @@ func agreloQuality(o *keys) (uint8, *Unreadable) {
 		return 0, nil
 	}
 	if x != math.Trunc(x) {
-		if x < 0 || x > 9 {
-			o.c.note(aprs.RefusalValueOutOfRange, "quality: outside 0-9")
-			return 0, nil
-		}
-		return 0, unsupported("%s: not a whole number", o.name("quality"))
+		// Not rounded: a non-integer quality is outside what the field holds.
+		o.c.note(aprs.RefusalValueOutOfRange, "quality: not a whole number")
+		return 0, nil
 	}
 	if x < 0 || x > 9 {
 		o.c.note(aprs.RefusalValueOutOfRange, "quality: outside 0-9")

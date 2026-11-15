@@ -2,7 +2,7 @@ package aprs
 
 import (
 	"fmt"
-	"math"
+	"strconv"
 
 	"github.com/packet-net/aprs-go/internal/hook"
 )
@@ -47,11 +47,9 @@ func nfStrs(ss []string) []any {
 	return out
 }
 
-// num is a float as JSON can hold it: a NaN or an infinity is null.
+// nfNum is a float. A NaN or an infinity stays one: it is a value, never absent, so the read-back
+// never compares it as nothing (it can only differ from what any bytes decode to).
 func nfNum(v float64) any {
-	if math.IsNaN(v) || math.IsInf(v, 0) {
-		return nil
-	}
 	return v
 }
 
@@ -279,6 +277,16 @@ func neutralDataAt(d Data, depth int) map[string]any {
 	panic(fmt.Sprintf("a data type the neutral form does not know: %T", d))
 }
 
+// nameOf is a table's name for an enumeration value, total: a value outside its type, which only a
+// program can build and the encoder refuses, has a name that no value of the type has, so nothing
+// ever indexes past a table.
+func nameOf(table []string, i int) string {
+	if i < 0 || i >= len(table) {
+		return "?" + strconv.Itoa(i)
+	}
+	return table[i]
+}
+
 // MicEMessageName gives a Mic-E message code's neutral name.
 func micEMessageName(m MicEMessage) string {
 	if n, ok := m.Custom(); ok {
@@ -307,12 +315,12 @@ func micEMessageName(m MicEMessage) string {
 
 // RawWeatherFormatName gives a raw weather format's neutral name.
 func rawWeatherFormatName(f RawWeatherFormat) string {
-	return [...]string{"peet-bros-hash", "peet-bros-star", "ultimeter-packet", "ultimeter-logging"}[f]
+	return nameOf([]string{"peet-bros-hash", "peet-bros-star", "ultimeter-packet", "ultimeter-logging"}, int(f))
 }
 
 // UnrecognizedName gives why nothing was decoded, as the neutral form names it.
 func unrecognizedName(u Unrecognized) string {
-	return [...]string{"empty", "not-aprs", "reserved-data-type", "malformed"}[u]
+	return nameOf([]string{"empty", "not-aprs", "reserved-data-type", "malformed"}, int(u))
 }
 
 var (
@@ -333,7 +341,7 @@ func nfPositioned(o nfObj, f *Positioned) {
 	}
 	o.put("symbol", nfSymbol(f.Symbol)).put("compressed", f.Compressed)
 	if t := f.Compression; t != nil {
-		o.put("compression", map[string]any{"fix": fixNames[t.Fix], "source": sourceNames[t.Source], "origin": originNames[t.Origin]})
+		o.put("compression", map[string]any{"fix": nameOf(fixNames[:], int(t.Fix)), "source": nameOf(sourceNames[:], int(t.Source)), "origin": nameOf(originNames[:], int(t.Origin))})
 	}
 	o.put("course_degrees", nfOptNum(f.CourseDegrees)).put("speed_knots", nfOptNum(f.SpeedKnots)).put("altitude_feet", nfOptNum(f.AltitudeFeet))
 	if p := f.PHG; p != nil {
@@ -348,7 +356,7 @@ func nfPositioned(o nfObj, f *Positioned) {
 	}
 	if a := f.Area; a != nil {
 		ao := nfObj{}
-		ao.put("shape", shapeNames[a.Shape]).put("lat_offset", int64(a.LatOffset)).put("color", colorNames[a.Color])
+		ao.put("shape", nameOf(shapeNames[:], int(a.Shape))).put("lat_offset", int64(a.LatOffset)).put("color", nameOf(colorNames[:], int(a.Color)))
 		ao.put("lon_offset", int64(a.LonOffset)).put("corridor_width_miles", nfOptInt(a.CorridorWidthMiles))
 		o.put("area", map[string]any(ao))
 	}
@@ -356,14 +364,14 @@ func nfPositioned(o nfObj, f *Positioned) {
 		o.put("df_bearing", map[string]any{"bearing_degrees": int64(b.BearingDegrees), "number": int64(b.Number), "range": int64(b.Range), "quality": int64(b.Quality)})
 	}
 	if s := f.Storm; s != nil {
-		so := nfNewObj(stormNames[s.Kind])
+		so := nfNewObj(nameOf(stormNames[:], int(s.Kind)))
 		so.put("sustained_wind_knots", nfOptInt(s.SustainedWindKnots)).put("gust_knots", nfOptInt(s.GustKnots)).
 			put("central_pressure_mbar", nfOptInt(s.CentralPressureMbar)).put("hurricane_radius_nm", nfOptInt(s.HurricaneRadiusNM)).
 			put("tropical_storm_radius_nm", nfOptInt(s.TropicalStormRadiusNM)).put("whole_gale_radius_nm", nfOptInt(s.WholeGaleRadiusNM))
 		o.put("storm", map[string]any(so))
 	}
 	if d := f.DAO; d != nil {
-		o.put("dao", map[string]any{"datum": string(d.Datum), "precision": daoNames[d.Precision]})
+		o.put("dao", map[string]any{"datum": string(d.Datum), "precision": nameOf(daoNames[:], int(d.Precision))})
 	}
 	if t := f.Telemetry; t != nil {
 		to := nfObj{}
@@ -381,7 +389,7 @@ func nfPositioned(o nfObj, f *Positioned) {
 		fo := nfObj{}
 		fo.put("mhz", nfNum(v.MHz))
 		if v.Tone != nil {
-			fo.put("tone", toneNames[*v.Tone])
+			fo.put("tone", nameOf(toneNames[:], int(*v.Tone)))
 		}
 		fo.put("tone_value", nfOptInt(v.ToneValue)).put("offset_khz", nfOptInt(v.OffsetKHz)).put("range", nfOptInt(v.Range))
 		fo.put("range_km", v.RangeKm).put("narrow", v.Narrow).put("ten_khz_resolution", v.TenKHzResolution)

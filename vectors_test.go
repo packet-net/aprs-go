@@ -136,6 +136,9 @@ func TestVectors(t *testing.T) {
 		if _, ok := c["pass_through"]; ok {
 			run("passthrough", passThroughCheck)
 		}
+		if _, ok := c["pass_through_inner"]; ok {
+			run("passthrough-inner", passThroughInnerCheck)
+		}
 	}
 	t.Logf("%d cases, %d checks, tolerance check ran on %d cases", len(cases), ran, toleranceRan)
 	// The check runs on every case whose lenient diagnostics name exactly one tolerable code: none
@@ -588,11 +591,28 @@ func buildCheck(c vectorCase) []string {
 // AX.25 writers (the information field as received, the header read back), and compares the line
 // and the frame, or the refusal, with the case's pass_through.
 func passThroughCheck(c vectorCase) []string {
-	want := c["pass_through"].(map[string]any)
 	d := decodeInput(c["input"].(map[string]any), aprs.Lenient)
 	if d.packet == nil {
 		return []string{"pass_through: the case does not decode"}
 	}
+	return passThrough(c["pass_through"].(map[string]any), d.packet, "pass_through")
+}
+
+// passThroughInnerCheck is passThroughCheck for a third-party packet's inner packet, taken out of
+// the outer one and written on its own: its header is read back by the outer rules.
+func passThroughInnerCheck(c vectorCase) []string {
+	d := decodeInput(c["input"].(map[string]any), aprs.Lenient)
+	if d.packet == nil {
+		return []string{"pass_through_inner: the case does not decode"}
+	}
+	outer, ok := d.packet.Data.(aprs.ThirdParty)
+	if !ok || outer.Packet == nil {
+		return []string{"pass_through_inner: the case is not a third-party packet"}
+	}
+	return passThrough(c["pass_through_inner"].(map[string]any), outer.Packet, "pass_through_inner")
+}
+
+func passThrough(want map[string]any, packet *aprs.Packet, name string) []string {
 	var out []string
 	compare := func(form string, got []byte, err error, hexForm bool) {
 		refusal, wantsRefusal := want[form+"_refusal"].(string)
@@ -601,14 +621,14 @@ func passThroughCheck(c vectorCase) []string {
 		case err != nil && wantsRefusal:
 			var e *aprs.EncodeError
 			if !errors.As(err, &e) || e.Code().ID() != refusal {
-				out = append(out, fmt.Sprintf("pass_through %s: refused with %v, expected %s", form, err, refusal))
+				out = append(out, fmt.Sprintf("%s %s: refused with %v, expected %s", name, form, err, refusal))
 			}
 		case err != nil:
 			if wantsBytes || wantsRefusal {
-				out = append(out, fmt.Sprintf("pass_through %s: refused (%v)", form, err))
+				out = append(out, fmt.Sprintf("%s %s: refused (%v)", name, form, err))
 			}
 		case wantsRefusal:
-			out = append(out, fmt.Sprintf("pass_through %s: wrote bytes, expected %s", form, refusal))
+			out = append(out, fmt.Sprintf("%s %s: wrote bytes, expected %s", name, form, refusal))
 		case wantsBytes:
 			gotText := string(got)
 			if hexForm {
@@ -616,13 +636,13 @@ func passThroughCheck(c vectorCase) []string {
 				text = strings.ToUpper(text)
 			}
 			if gotText != text {
-				out = append(out, fmt.Sprintf("pass_through %s: expected %q, wrote %q", form, text, gotText))
+				out = append(out, fmt.Sprintf("%s %s: expected %q, wrote %q", name, form, text, gotText))
 			}
 		}
 	}
-	line, err := d.packet.TNC2Line()
+	line, err := packet.TNC2Line()
 	compare("tnc2", line, err, false)
-	frame, err := d.packet.AX25()
+	frame, err := packet.AX25()
 	compare("ax25", frame, err, true)
 	return out
 }

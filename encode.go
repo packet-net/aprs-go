@@ -18,37 +18,39 @@ import (
 // its position in the destination address: use NewPacket, which works that address out. data may
 // also be a pointer to one of the data types.
 func Encode(data Data) ([]byte, error) {
-	out, _, err := encodeInformation(data, false)
+	out, _, err := encodeInformation(data, encodeOptions{})
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// encodeInformation writes data's information field, and for Mic-E (when micE is set; Encode
+// encodeOptions are what a caller inside the package tells the encoder besides the data, as
+// arguments and never as a mark held on the data, which a caller could see and copy.
+type encodeOptions struct {
+	// micE: the data may be Mic-E, which carries half its position in the destination the call
+	// computes (Encode refuses it).
+	micE bool
+	// bytesFirst: a Mic-E builder's altitude goes in the Mic-E altitude bytes first, then in a
+	// /A= only where the bytes' form reads back wrong and a /A= holds the value exactly. Neutral
+	// data, which does not say where an altitude came from, goes in a /A= first where only that
+	// holds it exactly (vectors README, Read-back).
+	bytesFirst bool
+}
+
+// encodeInformation writes data's information field, and for Mic-E (when opts.micE is set; Encode
 // refuses it) the destination the report computes: the rules' own checks, then the forms the
 // Encoding rule allows, then THE read-back (readBack), then the size. It is how every public
 // path gets bytes, so none returns bytes that did not read back.
-func encodeInformation(data Data, micE bool) ([]byte, Address, *EncodeError) {
+func encodeInformation(data Data, opts encodeOptions) ([]byte, Address, *EncodeError) {
 	data, err := prepare(data)
 	if err != nil {
 		return nil, Address{}, err
 	}
-	var f forms
-	if m, ok := data.(MicEReport); ok {
-		if !micE {
-			return nil, Address{}, newEncodeError(RefusalNotEncodable, "Mic-E data carries half its position in the destination address, which this information field leaves out: use NewPacket")
-		}
-		if err := validate(m); err != nil {
-			return nil, Address{}, err
-		}
-		f, err = encodeMicE(&m)
-	} else {
-		if err := validate(data); err != nil {
-			return nil, Address{}, err
-		}
-		f, err = encodeForms(data)
+	if _, ok := data.(MicEReport); ok && !opts.micE {
+		return nil, Address{}, newEncodeError(RefusalNotEncodable, "Mic-E data carries half its position in the destination address, which this information field leaves out: use NewPacket")
 	}
+	f, err := formsFor(data, opts.bytesFirst)
 	if err != nil {
 		return nil, Address{}, err
 	}
@@ -65,8 +67,20 @@ func encodeInformation(data Data, micE bool) ([]byte, Address, *EncodeError) {
 
 // encode is encodeInformation for data that is not Mic-E.
 func encode(data Data) ([]byte, *EncodeError) {
-	out, _, err := encodeInformation(data, false)
+	out, _, err := encodeInformation(data, encodeOptions{})
 	return out, err
+}
+
+// formsFor is the rules' own checks of data and the forms it may be written in (a Mic-E report's
+// with the destination it computes). It never gives bytes to a caller: only readBack does.
+func formsFor(data Data, bytesFirst bool) (forms, *EncodeError) {
+	if err := validate(data); err != nil {
+		return forms{}, err
+	}
+	if m, ok := data.(MicEReport); ok {
+		return encodeMicE(&m, bytesFirst)
+	}
+	return encodeForms(data)
 }
 
 // encodeForms gives the forms an information field may be written in, after the rules' own

@@ -11,9 +11,11 @@ const (
 	// RefusalInvalidAddress: a header address is not 1-9 letters, digits or - in TNC2 text.
 	RefusalInvalidAddress RefusalCode = iota
 	// RefusalAX25CannotCarry: an AX.25 frame cannot carry the header: a call over 6 characters
-	// or in lower case, an SSID over 15 or with a leading zero, more than 8 path entries.
+	// or in lower case, an SSID over 15 or with a leading zero, an empty address (a decoded
+	// packet's empty destination, say), more than 8 path entries.
 	RefusalAX25CannotCarry
-	// RefusalTNC2CannotCarry: a TNC2 line cannot carry the packet.
+	// RefusalTNC2CannotCarry: a TNC2 line cannot carry the packet: a CR or LF inside the
+	// information field would end the line there (one at the very end is carried).
 	RefusalTNC2CannotCarry
 	// RefusalInvalidThirdPartyHeader: a third-party packet's inner header cannot be written as received.
 	RefusalInvalidThirdPartyHeader
@@ -70,6 +72,10 @@ const (
 	// RefusalInformationFieldTooLong: the information field as written is over 256 bytes
 	// (APRS12c ch. 3) and nothing else is wrong with the data: checked last, on the bytes written.
 	RefusalInformationFieldTooLong
+	// RefusalInvalidPath: a path whose entry not marked used comes before one that is. It reads
+	// back used, in a line and in a frame, and no decoder gives one: a fault of the header given,
+	// found when the header is given, before any data fault, whatever form is written.
+	RefusalInvalidPath
 )
 
 var refusalIDs = [...]string{
@@ -78,10 +84,11 @@ var refusalIDs = [...]string{
 	"invalid-character", "text-reads-as-field", "not-a-number", "value-out-of-range", "value-has-no-form",
 	"value-given-twice", "invalid-timestamp", "missing-field", "invalid-symbol", "symbol-mismatch",
 	"extension-conflict", "field-not-allowed", "invalid-code", "invalid-nmea", "not-encodable",
-	"does-not-read-back", "information-field-too-long",
+	"does-not-read-back", "information-field-too-long", "invalid-path",
 }
 
-// AllRefusalCodes gives every refusal code, in the order of the vectors' refusals list.
+// AllRefusalCodes gives every refusal code, in the order of the constants (new codes come last, so
+// no value changes).
 func AllRefusalCodes() []RefusalCode {
 	out := make([]RefusalCode, len(refusalIDs))
 	for i := range out {
@@ -125,7 +132,7 @@ func refusalForValue(x float64) RefusalCode {
 // refusalOrder is the order in which a refusal with several faults names its code (the vectors
 // README, Refusal reasons): the first code that applies.
 var refusalOrder = [...]RefusalCode{
-	RefusalNotEncodable, RefusalInvalidAddress, RefusalInvalidThirdPartyHeader, RefusalInvalidAddressee, RefusalInvalidName, RefusalInvalidTimestamp,
+	RefusalNotEncodable, RefusalInvalidAddress, RefusalInvalidPath, RefusalInvalidThirdPartyHeader, RefusalInvalidAddressee, RefusalInvalidName, RefusalInvalidTimestamp,
 	RefusalNotANumber, RefusalValueOutOfRange, RefusalValueHasNoForm, RefusalInvalidCode, RefusalInvalidSymbol,
 	RefusalInvalidCharacter, RefusalTooLong, RefusalPaddingSpace, RefusalMalformed, RefusalInvalidMessageID,
 	RefusalInvalidNMEA, RefusalExtensionConflict, RefusalFieldNotAllowed, RefusalSymbolMismatch,
@@ -174,6 +181,9 @@ type pending struct {
 }
 
 func (p *pending) note(e *EncodeError) {
+	if e == nil {
+		return
+	}
 	if p.err == nil || e.code.rank() < p.err.code.rank() {
 		p.err = e
 	}

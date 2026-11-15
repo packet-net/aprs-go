@@ -110,3 +110,89 @@ func enumsInRange(data Data) bool {
 	}
 	return true
 }
+
+// innerDataFault is the rule checks that apply to the data of a third-party packet's inner
+// packet, which a decoder's own data never fails but a program's can: an enumeration outside its
+// type or a number that is not one (not-a-number, at any depth of the data). The inner
+// information field is written as received, so the rest of what the encoder checks of data is
+// not asked of it; when its bytes do not read back as the data held, the refusal is named by the
+// rule that data breaks (innerRuleFault).
+func innerDataFault(data Data) *EncodeError {
+	data = derefData(data)
+	if data == nil {
+		return nil
+	}
+	if u, ok := data.(Unrecognized); ok && u > UnrecognizedMalformed {
+		return newEncodeError(RefusalValueOutOfRange, "undecoded data is not one of the reasons a decoder gives")
+	}
+	if !enumsInRange(data) {
+		return newEncodeError(RefusalValueOutOfRange, "an enumeration (a timestamp kind, compression type, area shape or colour, storm kind, !DAO! precision, tone, raw weather format or Mic-E message) is not one of its type's values")
+	}
+	if holdsNonFinite(reflect.ValueOf(data)) {
+		return newEncodeError(RefusalNotANumber, "a number is NaN or infinite")
+	}
+	return nil
+}
+
+// holdsNonFinite says whether v holds a NaN or an infinity anywhere but in a third-party
+// packet's inner packet (which has its own level).
+func holdsNonFinite(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.Float32, reflect.Float64:
+		return !isFinite(v.Float())
+	case reflect.Pointer, reflect.Interface:
+		if v.IsNil() || v.Type() == packetType {
+			return false
+		}
+		return holdsNonFinite(v.Elem())
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if holdsNonFinite(v.Field(i)) {
+				return true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		if v.Type().Elem().Kind() == reflect.Uint8 {
+			return false
+		}
+		for i := 0; i < v.Len(); i++ {
+			if holdsNonFinite(v.Index(i)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// innerRuleFault names the rule that the data of a third-party packet's inner packets break, at
+// any depth, when their bytes do not read back as that data: the first code in the Refusal
+// reasons order among the data's rule checks, as for top-level data. nil when no rule is broken.
+func innerRuleFault(data Data) *EncodeError {
+	best := (*EncodeError)(nil)
+	note := func(e *EncodeError) {
+		if e != nil && (best == nil || e.code.rank() < best.code.rank()) {
+			best = e
+		}
+	}
+	for depth := 0; depth <= maxThirdPartyDepth+1; depth++ {
+		data = derefData(data)
+		if data == nil {
+			break
+		}
+		note(innerDataFault(data))
+		if best == nil || best.code.rank() > RefusalNotANumber.rank() {
+			// A level that is a third-party packet has its own rules at the next level.
+			if _, isThirdParty := data.(ThirdParty); !isThirdParty {
+				if _, err := formsFor(data, false); err != nil {
+					note(err)
+				}
+			}
+		}
+		tp, ok := data.(ThirdParty)
+		if !ok || tp.Packet == nil {
+			break
+		}
+		data = tp.Packet.Data
+	}
+	return best
+}
