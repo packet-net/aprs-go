@@ -402,6 +402,38 @@ func locatorLen(s []byte) (int, bool) {
 // goes in the Mic-E altitude bytes (whole metres) unless the report says it is in the comment, as
 // /A= feet (vectors README, Builder rules).
 func encodeMicE(r *MicEReport) (forms, *EncodeError) {
+	first, err := encodeMicEForms(r, false)
+	if err != nil {
+		return first, err
+	}
+	// The forms of the altitude are tried in order: the Mic-E bytes (each with the comment straight
+	// on, after a /, after a space), then a /A= only if one holds the value exactly (vectors
+	// README, Encoding). The second matters where the comment holds a /A= the bytes' form reads
+	// back as its own.
+	if f := r.Fields.AltitudeFeet; f != nil && !r.AltitudeInComment && (r.bytesFirst || !micEAltitudeInText(r, *f, roundSteps(*f/metresToFeet))) {
+		feet := *f
+		if nearWhole(feet) && inRange(roundSteps(feet), -99999, 999999) {
+			if second, err := encodeMicEForms(r, true); err == nil {
+				return forms{
+					n: first.n + second.n,
+					at: func(i int) []byte {
+						if i < first.n {
+							return first.at(i)
+						}
+						return second.at(i - first.n)
+					},
+					dest: first.dest,
+					micE: true,
+				}, nil
+			}
+		}
+	}
+	return first, nil
+}
+
+// encodeMicEForms is encodeMicE's forms with the altitude in the Mic-E bytes, or, with inText, in a
+// /A= where one holds it.
+func encodeMicEForms(r *MicEReport, inText bool) (forms, *EncodeError) {
 	f := &r.Fields
 	pend := &pending{}
 	pend.run(checkSymbol(f.Symbol))
@@ -634,7 +666,7 @@ func encodeMicE(r *MicEReport) (forms, *EncodeError) {
 	if f.AltitudeFeet != nil {
 		feet := *f.AltitudeFeet
 		metres := roundSteps(feet / metresToFeet)
-		if r.AltitudeInComment || micEAltitudeInText(r, feet, metres) {
+		if inText || r.AltitudeInComment || (!r.bytesFirst && micEAltitudeInText(r, feet, metres)) {
 			altitudeInText = &feet
 		} else {
 			datum := metres + 10000

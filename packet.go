@@ -382,6 +382,17 @@ func decodeAX25(frame []byte, options ParseOptions) (*Packet, *HeaderError) {
 		}
 		path = append(path, PathEntry{Address: decoded[i+2], Used: b[6]&0x80 != 0})
 	}
+	// H bits are read as TNC2 marks are: every entry up to the last one with its bit set has been
+	// used, and several set bits are normal.
+	last := -1
+	for i, e := range path {
+		if e.Used {
+			last = i
+		}
+	}
+	for i := 0; i < last; i++ {
+		path[i].Used = true
+	}
 	return decodeWithContext(ctx, source, destination, path, append([]byte(nil), frame[at+2:]...)), nil
 }
 
@@ -549,13 +560,16 @@ func checkHeaderBack(p *Packet, back *Packet, herr *HeaderError, anomaly Refusal
 	if herr != nil {
 		return newEncodeError(RefusalInvalidAddress, "the header written does not read back: "+herr.Error())
 	}
+	// No diagnostic the held packet does not itself carry: a header defect it holds (an empty
+	// destination) may read back with it.
 	for _, d := range back.Diagnostics {
+		if p.carries(d.Code) {
+			continue
+		}
 		if d.Code == CodeEmptyDestination || d.Code == CodeEmptyPathEntry {
 			return newEncodeError(RefusalInvalidAddress, "a header address is empty: "+d.Message)
 		}
-	}
-	if len(back.Diagnostics) > 0 {
-		return newEncodeError(RefusalDoesNotReadBack, "the header written reads back with a diagnostic: "+back.Diagnostics[0].String())
+		return newEncodeError(RefusalDoesNotReadBack, "the header written reads back with a diagnostic: "+d.String())
 	}
 	if back.Source != p.Source || back.Destination != p.Destination || len(back.Path) != len(p.Path) {
 		return newEncodeError(RefusalDoesNotReadBack, "the header written does not read back as the source, destination and path given")
@@ -571,6 +585,16 @@ func checkHeaderBack(p *Packet, back *Packet, herr *HeaderError, anomaly Refusal
 		}
 	}
 	return nil
+}
+
+// carries says whether the packet holds a diagnostic with the code.
+func (p *Packet) carries(code Code) bool {
+	for _, d := range p.Diagnostics {
+		if d.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 // String gives the TNC2 line as text.
@@ -617,17 +641,6 @@ func (p *Packet) ax25() ([]byte, *EncodeError) {
 	// The addresses written are read back, as a line's header is: a frame is read as a line is, an
 	// entry used when its H bit is set or it comes before one that is.
 	back, herr := decodeAX25(out, Lenient)
-	if herr == nil {
-		last := -1
-		for i, e := range back.Path {
-			if e.Used {
-				last = i
-			}
-		}
-		for i := 0; i < last; i++ {
-			back.Path[i].Used = true
-		}
-	}
 	if err := checkHeaderBack(p, back, herr, RefusalAX25CannotCarry); err != nil {
 		if err.code == RefusalInvalidAddress || err.code == RefusalDoesNotReadBack {
 			// What a frame cannot hold is its own refusal.
@@ -726,6 +739,10 @@ func ax25Address(ctx *context, b []byte, offset int, role addressRole) (Address,
 }
 
 func writeAX25Address(out []byte, a Address, flags byte) ([]byte, *EncodeError) {
+	if a.text == "" {
+		// An empty address is six spaces; the read-back decides whether the packet may carry it.
+		return append(out, ' '<<1, ' '<<1, ' '<<1, ' '<<1, ' '<<1, ' '<<1, flags), nil
+	}
 	if !a.IsAX25() {
 		return out, newEncodeError(RefusalAX25CannotCarry, fmt.Sprintf("'%s' cannot be sent in an AX.25 frame: 1-6 upper-case letters and digits, SSID 0-15", a.text))
 	}

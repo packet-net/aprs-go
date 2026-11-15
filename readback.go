@@ -150,45 +150,67 @@ func innerDiagnostics(m map[string]any) {
 // differ: exact key sets, strings, booleans and integers exactly, other numbers within 1e-9
 // (relative above 1).
 func nfDifferences(expected, actual any, at string, out *[]string) {
+	var trail []string
+	if at != "" {
+		trail = append(trail, strings.TrimPrefix(at, "."))
+	}
+	nfDiff(expected, actual, &trail, out)
+}
+
+// nfDiff walks both values with the keys so far in a trail, joined into a path only where a
+// difference is recorded, never for the (many) fields that agree.
+func nfDiff(expected, actual any, trail *[]string, out *[]string) {
+	record := func(extra string) {
+		path := ""
+		for _, k := range *trail {
+			path += "." + k
+		}
+		if extra != "" {
+			path += "." + extra
+		}
+		*out = append(*out, path)
+	}
 	switch e := expected.(type) {
 	case map[string]any:
 		a, ok := actual.(map[string]any)
 		if !ok {
-			*out = append(*out, at)
+			record("")
 			return
 		}
 		for k, ev := range e {
 			if av, ok := a[k]; ok {
-				nfDifferences(ev, av, at+"."+k, out)
+				*trail = append(*trail, k)
+				nfDiff(ev, av, trail, out)
+				*trail = (*trail)[:len(*trail)-1]
 			} else {
-				*out = append(*out, at+"."+k)
+				record(k)
 			}
 		}
 		for k := range a {
 			if _, ok := e[k]; !ok {
-				*out = append(*out, at+"."+k)
+				record(k)
 			}
 		}
 	case []any:
 		a, ok := actual.([]any)
 		if !ok || len(a) != len(e) {
-			*out = append(*out, at)
+			record("")
 			return
 		}
 		for i := range e {
-			nfDifferences(e[i], a[i], at, out)
+			nfDiff(e[i], a[i], trail, out)
 		}
 	case int64:
 		if a, ok := actual.(int64); !ok || a != e {
-			*out = append(*out, at)
+			record("")
 		}
 	case float64:
 		if a, ok := actual.(float64); !ok || !sameNumber(e, a) {
-			*out = append(*out, at)
+			record("")
 		}
 	default:
 		if expected != actual {
-			*out = append(*out, at)
+			record("")
 		}
 	}
 }

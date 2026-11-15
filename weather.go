@@ -503,6 +503,15 @@ func writeWeatherFields(out []byte, w *Weather, p *pending) []byte {
 			out = pushDigits(out, uint64(*w.RainRaw), 3)
 		}
 	}
+	// Free text with a control character is invalid-character, a rule check before the read-back.
+	for _, e := range w.Extra {
+		if hasControl(e.Value) || e.Letter < ' ' || e.Letter == 0x7f {
+			p.note(newEncodeError(RefusalInvalidCharacter, "an extra weather field cannot contain a control character"))
+		}
+	}
+	if w.Unit != nil && hasControl(*w.Unit) {
+		p.note(newEncodeError(RefusalInvalidCharacter, "a weather unit cannot contain a control character"))
+	}
 	for _, e := range w.Extra {
 		// As they are read: a letter the spec does not define, then two or more digits, dots or
 		// -, ending in a digit.
@@ -518,12 +527,17 @@ func writeWeatherFields(out []byte, w *Weather, p *pending) []byte {
 		out = append(out, byte(e.Letter))
 		out = append(out, e.Value...)
 	}
+	// An empty unit is no unit.
+	unit := w.Unit
+	if unit != nil && *unit == "" {
+		unit = nil
+	}
 	switch {
-	case w.Software != nil && w.Unit != nil && *w.Software >= 0 && *w.Software < 0x80 && isSoftwareAndUnit([]byte(string(*w.Software)+*w.Unit)):
+	case w.Software != nil && unit != nil && *w.Software >= 0 && *w.Software < 0x80 && isSoftwareAndUnit([]byte(string(*w.Software)+*w.Unit)):
 		out = append(out, byte(*w.Software))
 		out = append(out, *w.Unit...)
-	case w.Software == nil && w.Unit == nil:
-	case w.Software == nil || w.Unit == nil:
+	case w.Software == nil && unit == nil:
+	case w.Software == nil || unit == nil:
 		// The Weather rule makes the software type and its unit one thing.
 		p.note(newEncodeError(RefusalMissingField, "a weather software type goes with its unit, and a unit with its software type"))
 	default:
@@ -607,5 +621,18 @@ func snowfall(out []byte, inches float64) ([]byte, *EncodeError) {
 
 // pushDigits writes value in at least width digits, zero-padded.
 func pushDigits(out []byte, value uint64, width int) []byte {
-	return append(out, fmt.Sprintf("%0*d", width, value)...)
+	var digits [20]byte
+	n := len(digits)
+	for {
+		n--
+		digits[n] = byte('0' + value%10)
+		value /= 10
+		if value == 0 {
+			break
+		}
+	}
+	for pad := width - (len(digits) - n); pad > 0; pad-- {
+		out = append(out, '0')
+	}
+	return append(out, digits[n:]...)
 }

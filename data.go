@@ -492,6 +492,12 @@ type MicEReport struct {
 	// whatever this says.
 	AltitudeInComment bool
 	Fields            Positioned
+
+	// bytesFirst is set by the builder: its altitude goes in the Mic-E altitude bytes first, and in
+	// a /A= only where the comment makes the bytes' form read back wrong and a /A= holds the value
+	// exactly. Neutral data, which does not say where an altitude came from, goes in a /A= first
+	// where only that holds it exactly.
+	bytesFirst bool
 }
 
 // MicEMessage is a Mic-E message code (APRS12c ch. 10). Custom codes are MicECustom(0) to

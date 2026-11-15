@@ -21,6 +21,7 @@ package aprs_test
 import (
 	"bufio"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -132,6 +133,9 @@ func TestVectors(t *testing.T) {
 			run("reencode", reencodeCheck)
 		}
 		run("readback", readbackCheck)
+		if _, ok := c["pass_through"]; ok {
+			run("passthrough", passThroughCheck)
+		}
 	}
 	t.Logf("%d cases, %d checks, tolerance check ran on %d cases", len(cases), ran, toleranceRan)
 	// The check runs on every case whose lenient diagnostics name exactly one tolerable code: none
@@ -578,6 +582,49 @@ func buildCheck(c vectorCase) []string {
 		return []string{fmt.Sprintf("build: expected %s, built %s", neutral.Show(expect["tnc2"]), show(o.Bytes))}
 	}
 	return nil
+}
+
+// passThroughCheck writes the lenient packet back as a program holds it, with its own TNC2 and
+// AX.25 writers (the information field as received, the header read back), and compares the line
+// and the frame, or the refusal, with the case's pass_through.
+func passThroughCheck(c vectorCase) []string {
+	want := c["pass_through"].(map[string]any)
+	d := decodeInput(c["input"].(map[string]any), aprs.Lenient)
+	if d.packet == nil {
+		return []string{"pass_through: the case does not decode"}
+	}
+	var out []string
+	compare := func(form string, got []byte, err error, hexForm bool) {
+		refusal, wantsRefusal := want[form+"_refusal"].(string)
+		text, wantsBytes := want[map[bool]string{true: form + "_hex", false: form}[hexForm]].(string)
+		switch {
+		case err != nil && wantsRefusal:
+			var e *aprs.EncodeError
+			if !errors.As(err, &e) || e.Code().ID() != refusal {
+				out = append(out, fmt.Sprintf("pass_through %s: refused with %v, expected %s", form, err, refusal))
+			}
+		case err != nil:
+			if wantsBytes || wantsRefusal {
+				out = append(out, fmt.Sprintf("pass_through %s: refused (%v)", form, err))
+			}
+		case wantsRefusal:
+			out = append(out, fmt.Sprintf("pass_through %s: wrote bytes, expected %s", form, refusal))
+		case wantsBytes:
+			gotText := string(got)
+			if hexForm {
+				gotText = strings.ToUpper(hex.EncodeToString(got))
+				text = strings.ToUpper(text)
+			}
+			if gotText != text {
+				out = append(out, fmt.Sprintf("pass_through %s: expected %q, wrote %q", form, text, gotText))
+			}
+		}
+	}
+	line, err := d.packet.TNC2Line()
+	compare("tnc2", line, err, false)
+	frame, err := d.packet.AX25()
+	compare("ax25", frame, err, true)
+	return out
 }
 
 func readbackCheck(c vectorCase) []string {

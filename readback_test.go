@@ -373,14 +373,17 @@ func TestTheHeaderWrittenIsReadBack(t *testing.T) {
 	}
 	eq(t, string(build(st("N0CALL-1*", "WIDE2-1")).TNC2()), "M0LTE-11>APZ001,N0CALL-1*,WIDE2-1:>hi")
 	eq(t, string(build(st("WIDE1-1", "WIDE2-1")).TNC2()), "M0LTE-11>APZ001,WIDE1-1,WIDE2-1:>hi")
-	// A decoded packet's header is read back as well: an empty destination is not one a line can
-	// carry as it reads back with a warning.
+	// A decoded packet's header is read back as well, with no diagnostic the packet does not carry:
+	// an empty destination the packet holds is written empty, and a hand-built one is refused.
 	p, err := aprs.DecodeTNC2([]byte("N0CALL>:>hi"), aprs.Lenient)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.TNC2Line(); err == nil || refusal(t, err) != aprs.RefusalInvalidAddress {
-		t.Errorf("an empty destination: %v", err)
+	eq(t, string(p.TNC2()), "N0CALL>:>hi")
+	held := *p
+	held.Diagnostics = nil
+	if _, err := held.TNC2Line(); err == nil || refusal(t, err) != aprs.RefusalInvalidAddress {
+		t.Errorf("an empty destination the packet does not carry: %v", err)
 	}
 	// A path entry marked used before the one the line marks is used too, so a decoded packet
 	// whose line marked two entries writes one mark and reads back the same.

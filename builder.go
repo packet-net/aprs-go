@@ -273,27 +273,14 @@ func (c *common) positioned(what string, micE bool) (Positioned, error) {
 		fields.Symbol = *c.symbol
 	}
 	if c.altitudeM != nil {
-		// Mic-E carries its altitude in whole metres (APRS12c ch. 10); a /A= is in feet.
-		metres := *c.altitudeM
-		if micE {
-			fields.AltitudeFeet = Ptr(roundSteps(metres) * metresToFeet)
-		} else {
-			fields.AltitudeFeet = Ptr(metres * metresToFeet)
-		}
+		// A Mic-E report carries its altitude in whole metres (APRS12c ch. 10), a /A= is in feet.
+		fields.AltitudeFeet = Ptr(*c.altitudeM * metresToFeet)
 	}
-	if micE && fields.AltitudeFeet != nil {
-		// A Mic-E altitude goes in the Mic-E altitude bytes, rounded once to the nearest metre
-		// from the value given, whatever its unit: 1000 feet is 305 metres. One outside what
-		// those bytes hold is refused, not moved to a /A= (vectors README, Builder rules); that
-		// is MicEBuilder.Data's to name, at its place in the order of refusals, so it is kept as
-		// given here.
-		feet := *fields.AltitudeFeet
-		if c.altitudeM == nil {
-			if metres := roundSteps(feet / metresToFeet); inRange(metres, -10000, 743570) {
-				fields.AltitudeFeet = Ptr(metres * metresToFeet)
-			}
-		}
-	}
+	// A Mic-E altitude goes in the Mic-E altitude bytes, rounded once to the nearest metre from
+	// the value given, whatever its unit: 1000 feet is 305 metres. A /A= only where the comment
+	// makes the bytes' form read back wrong and one holds the value exactly. One outside what the
+	// bytes hold is refused, not moved to a /A= (vectors README, Builder rules); that is
+	// MicEBuilder.Data's to name, at its place in the order of refusals.
 	// A course that rounds to 0 is the spec's unknown course, which Mic-E sends as 0 (APRS12c ch. 10).
 	if micE && fields.CourseDegrees != nil && roundSteps(*fields.CourseDegrees) == 0 {
 		fields.CourseDegrees = nil
@@ -529,6 +516,7 @@ func (b MicEBuilder) data() (Data, error) {
 		MicEMessage: b.micEMessage,
 		TypeCode:    &typeCode,
 		Fields:      fields,
+		bytesFirst:  true,
 	}, nil
 }
 
