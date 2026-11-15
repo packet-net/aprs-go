@@ -273,42 +273,43 @@ func micEStatus(ctx *context, report *MicEReport, b []byte, offset int) bool {
 		s = drain(s, 0, 4)
 	}
 
-	// A grid locator and the /G symbol, then a space before any text.
+	// A grid locator and the /G symbol, then a space before any text. The space is judged on what
+	// the decoder lifts for the data: the text left after the locator once the altitude, base-91
+	// telemetry and !DAO! are out, in the same order and with the same refusals (vectors
+	// interpretations.md, "Where a Mic-E locator is read"). A space at the start of the bytes is
+	// the locator's at once, since no lifted element starts with one; otherwise the verdict waits
+	// for the lifting below. The locator's space separates it and is not part of the comment.
+	var judge func(rest []byte) (bool, bool)
 	if n, ok := locatorLen(s); ok {
 		report.Locator = Ptr(asciiUpper(lossy(s[:n])))
 		s = drain(s, 0, n+2)
-		// Base-91 telemetry and a !DAO! are lifted out before the locator is read, so a locator
-		// followed straight by them alone has nothing after it (vectors interpretations.md,
-		// "Where a Mic-E locator is read").
-		// A later altitude that will be lifted is out too, and what it leaves between two bars
-		// may be telemetry, so the space is judged on the text after every lifted element.
-		after := s
-		if !firstOK && ctx.options.Tolerates(CodeMicEAltitudeNotFirst) {
-			for i := 0; i+3 < len(s); i++ {
-				if _, ok := micEAltitude(s[i:]); ok {
-					after = drain(append([]byte(nil), s...), i, i+4)
-					break
+		if len(s) > 0 && s[0] == ' ' {
+			s = drain(s, 0, 1)
+		} else {
+			judge = func(rest []byte) (bool, bool) {
+				if len(rest) == 0 {
+					return false, true
 				}
-			}
-		}
-		if lifted := withoutTelemetryAndDAO(after); len(lifted) > 0 {
-			if lifted[0] == ' ' {
-				// Its space is the locator's even with telemetry before it in the bytes; one at the
-				// very start is dropped here, the other is the comment's own delimiter.
-				if s[0] == ' ' {
-					s = drain(s, 0, 1)
+				if rest[0] == ' ' {
+					return true, true
 				}
-			} else if !ctx.tolerate(CodeMissingSpaceAfterLocator, "text straight after the grid locator; a space comes first (APRS12c ch. 10)", offset) {
-				return false
+				return false, ctx.tolerate(CodeMissingSpaceAfterLocator, "text straight after the grid locator; a space comes first (APRS12c ch. 10)", offset)
 			}
 		}
 	}
 
 	// A data extension at the start of the text, lifted before an altitude is looked for later on,
 	// so its bytes are never read as one (0PH} in PHG3330PH}); one later on is found by the
-	// comment's rules.
+	// comment's rules. One straight after the locator, with no space between, is read as if the
+	// space were there, and the space is missing.
 	if n, ok := micEExtension(&report.Fields, s); ok {
 		s = drain(s, 0, n)
+		if judge != nil {
+			judge = nil
+			if !ctx.tolerate(CodeMissingSpaceAfterLocator, "text straight after the grid locator; a space comes first (APRS12c ch. 10)", offset) {
+				return false
+			}
+		}
 	}
 
 	// An altitude later in the text, when none came first: a tolerated reading. Taking it out
@@ -325,6 +326,13 @@ func micEStatus(ctx *context, report *MicEReport, b []byte, offset int) bool {
 				s = drain(s, i, i+4)
 				joined = i
 			} else if joinsIntoAltitude(s) {
+				// The locator comes first in reading order: its space is judged on the text as it
+				// stands, nothing having been taken out of it here.
+				if judge != nil {
+					if _, ok := judge(withoutTelemetryAndDAO(s)); !ok {
+						return false
+					}
+				}
 				// Strictly the altitude is text and telemetry and the !DAO! are lifted as usual,
 				// unless what is left holds an altitude across a place one was taken from, which a
 				// lenient reader would then take: that reading is rejected (vectors README, Mic-E).
@@ -338,7 +346,7 @@ func micEStatus(ctx *context, report *MicEReport, b []byte, offset int) bool {
 	// A /A= in the text wins over the Mic-E bytes, even when it says the same: whether the text
 	// gave one is seen by letting it write into an empty field.
 	report.Fields.AltitudeFeet = nil
-	ok := commentTail(ctx, &report.Fields, s, offset, joined)
+	ok := commentTail(ctx, &report.Fields, s, offset, joined, judge)
 	report.AltitudeInComment = report.Fields.AltitudeFeet != nil
 	if !report.AltitudeInComment {
 		report.Fields.AltitudeFeet = altitudeBefore

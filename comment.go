@@ -137,7 +137,7 @@ func decodeComment(ctx *context, fields *Positioned, bytes *cs, b []byte, offset
 		}
 		at = n
 	}
-	return commentTail(ctx, fields, b[at:], offset+at, -1)
+	return commentTail(ctx, fields, b[at:], offset+at, -1, nil)
 }
 
 // weatherEnd gives where the weather text of a positioned report ends in b: the start of the
@@ -159,7 +159,7 @@ func weatherEnd(b []byte) int {
 // report should not have.
 func weatherTail(ctx *context, fields *Positioned, b []byte, offset int) bool {
 	c := append([]byte(nil), b...)
-	c, ok := liftTelemetryAndDAO(ctx, fields, c, offset, -1)
+	c, ok := liftTelemetryAndDAO(ctx, fields, c, offset, -1, nil)
 	if !ok {
 		return false
 	}
@@ -178,8 +178,10 @@ func weatherTail(ctx *context, fields *Positioned, b []byte, offset int) bool {
 // liftTelemetryAndDAO lifts base-91 telemetry and a !DAO! out of c. The telemetry block is
 // located first, so a DAO-shaped run inside it is not taken for a DAO. A !DAO! is five bytes as
 // sent, so one that spans joined (where bytes were taken out before, bringing the bytes on either
-// side together; -1 for none) is not one.
-func liftTelemetryAndDAO(ctx *context, fields *Positioned, c []byte, offset, joined int) ([]byte, bool) {
+// side together; -1 for none) is not one. judge, when not nil, is given what is left of c once they
+// are out, before the !DAO! is applied (so a defect before it is met first), and says whether that
+// text starts with a Mic-E locator's space, which is then taken out too.
+func liftTelemetryAndDAO(ctx *context, fields *Positioned, c []byte, offset, joined int, judge func(rest []byte) (bool, bool)) ([]byte, bool) {
 	tSpan, t, tOK := findTelemetry(c)
 	var tp *span
 	if tOK {
@@ -188,20 +190,34 @@ func liftTelemetryAndDAO(ctx *context, fields *Positioned, c []byte, offset, joi
 	dSpan, found, dOK := findDAO(c, tp, joined)
 	var removals []span
 	if tOK {
-		fields.Telemetry = &t
 		removals = append(removals, tSpan)
+	}
+	if dOK {
+		removals = append(removals, dSpan)
+	}
+	sort.SliceStable(removals, func(i, j int) bool { return removals[i].start > removals[j].start })
+	rest := append([]byte(nil), c...)
+	for _, r := range removals {
+		rest = drain(rest, r.start, r.end)
+	}
+	if judge != nil {
+		separator, ok := judge(rest)
+		if !ok {
+			return c, false
+		}
+		if separator {
+			rest = drain(rest, 0, 1)
+		}
+	}
+	if tOK {
+		fields.Telemetry = &t
 	}
 	if dOK {
 		if !applyDAO(ctx, fields, found, offset+dSpan.start) {
 			return c, false
 		}
-		removals = append(removals, dSpan)
 	}
-	sort.SliceStable(removals, func(i, j int) bool { return removals[i].start > removals[j].start })
-	for _, r := range removals {
-		c = drain(c, r.start, r.end)
-	}
-	return c, true
+	return rest, true
 }
 
 // telemetryAndDAOSpans says where the base-91 telemetry and !DAO! commentTail would lift out of c
@@ -236,9 +252,9 @@ func withoutTelemetryAndDAO(c []byte) []byte {
 // the text, and a voice frequency at the start, in the order that keeps one from being taken for
 // another; the rest, less one leading delimiter, is the comment. joined is where bytes were
 // already taken out of the text (a Mic-E altitude), which a !DAO! does not span, or -1.
-func commentTail(ctx *context, fields *Positioned, b []byte, offset, joined int) bool {
+func commentTail(ctx *context, fields *Positioned, b []byte, offset, joined int, judge func(rest []byte) (bool, bool)) bool {
 	c := append([]byte(nil), b...)
-	c, ok := liftTelemetryAndDAO(ctx, fields, c, offset, joined)
+	c, ok := liftTelemetryAndDAO(ctx, fields, c, offset, joined, judge)
 	if !ok {
 		return false
 	}

@@ -123,7 +123,7 @@ func TestVectors(t *testing.T) {
 		run("lenient", lenientCheck)
 		run("strict", strictCheck)
 		if _, ok := c["strict"].(map[string]any); ok {
-			if code, ok := toleranceFor(c); ok && !strictRejectedByOther(c, code) {
+			if _, ok := toleranceFor(c); ok {
 				run("tolerance", toleranceCheck)
 				toleranceRan++
 			}
@@ -134,6 +134,11 @@ func TestVectors(t *testing.T) {
 		run("readback", readbackCheck)
 	}
 	t.Logf("%d cases, %d checks, tolerance check ran on %d cases", len(cases), ran, toleranceRan)
+	// The check runs on every case whose lenient diagnostics name exactly one tolerable code: none
+	// is skipped (README, "Checking a case").
+	if want := toleranceCases(cases); toleranceRan != want {
+		t.Errorf("the tolerance check ran on %d cases, expected %d", toleranceRan, want)
+	}
 }
 
 // ------------------------------------------------------------------ decoding
@@ -299,15 +304,26 @@ func containsString(list []string, s string) bool {
 	return false
 }
 
-// strictRejectedByOther is true when the case's strict result is a rejection by a code other than
-// the tolerance, which the tolerance check then leaves out (README, "Checking a case").
-func strictRejectedByOther(c vectorCase, tolerance aprs.Code) bool {
-	s, ok := c["strict"].(map[string]any)
-	if !ok {
-		return false
+// toleranceCases counts the decode cases whose lenient diagnostics name exactly one tolerable
+// code, each of which the tolerance check must run on.
+func toleranceCases(cases []vectorCase) int {
+	n := 0
+	for _, c := range cases {
+		input := c["input"].(map[string]any)
+		if _, ok := input["encode"]; ok {
+			continue
+		}
+		if _, ok := input["build"]; ok {
+			continue
+		}
+		if _, ok := c["strict"].(map[string]any); !ok {
+			continue
+		}
+		if _, ok := toleranceFor(c); ok {
+			n++
+		}
 	}
-	rejectedBy, ok := s["rejected_by"].(string)
-	return ok && rejectedBy != tolerance.ID()
+	return n
 }
 
 // toleranceFor gives the one tolerance a case's lenient decoding used, if exactly one.
@@ -346,11 +362,38 @@ func strictCheck(c vectorCase) []string {
 func toleranceCheck(c vectorCase) []string {
 	code, _ := toleranceFor(c)
 	d := decodeInput(c["input"].(map[string]any), aprs.Lenient.Without(code))
+	var problems []string
+	if s, ok := c["strict"].(map[string]any); ok {
+		if other, ok := s["rejected_by"].(string); ok && other != code.ID() {
+			// Strict rejects by another code: turning the one tolerance off must give a reading
+			// that carries that code as a warning (README, "Checking a case").
+			problems = checkReadingWith(d, "warning:"+other)
+		} else {
+			problems = checkStrict(c, d)
+		}
+	} else {
+		problems = checkStrict(c, d)
+	}
 	var out []string
-	for _, p := range checkStrict(c, d) {
+	for _, p := range problems {
 		out = append(out, fmt.Sprintf("with only %s not tolerated: %s", code, p))
 	}
 	return out
+}
+
+// checkReadingWith expects a reading (not a rejection or unrecognized data) whose diagnostics
+// include want.
+func checkReadingWith(d decoded, want string) []string {
+	if d.packet == nil {
+		return []string{"expected a reading with " + want + ", got " + describe(d)}
+	}
+	if _, bad := d.packet.Data.(aprs.Unrecognized); bad {
+		return []string{"expected a reading with " + want + ", got " + describe(d)}
+	}
+	if !containsString(neutral.Diagnostics(d.packet.Diagnostics), want) {
+		return []string{"expected a reading with " + want + ", got " + describe(d)}
+	}
+	return nil
 }
 
 func show(b []byte) string {

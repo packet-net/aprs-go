@@ -126,8 +126,8 @@ func decodePositionReport(ctx *context, info []byte, offset int) Data {
 // (UAP 5.8). A position straight after the DTI (the timestamp is missing) is tried first: a
 // timestamp starts with six digits, so it cannot be mistaken for one. Then seven garbled bytes are
 // skipped. When the seventh byte is z, / or h and an uncompressed position follows the seven,
-// that reading goes first. Where the position is is judged on the position itself, under the options in force,
-// not on anything after it (vectors README, "Timestamps that are not there").
+// that reading goes first. Where the position is is judged on the position itself, under the
+// options in force, not on anything after it (vectors README, "Timestamps that are not there").
 func badTimestamp(ctx *context, info []byte, offset int, messaging bool) Data {
 	order := []int{1, 8}
 	if len(info) > 8 && (info[7] == 'z' || info[7] == '/' || info[7] == 'h') && info[8] >= '0' && info[8] <= '9' {

@@ -202,3 +202,45 @@ func TestGarbledTimestampPositionIsJudgedOnThePositionAlone(t *testing.T) {
 		t.Errorf("not a position: %v", p.Data)
 	}
 }
+
+// Round 5: a Mic-E locator's space is judged on the decoder's own result, the text left once the
+// altitude, base-91 telemetry and !DAO! are lifted as for the data, and that space separates the
+// locator from the comment (vectors README, Mic-E).
+func TestMicELocatorSpaceIsJudgedOnWhatTheDecoderLifts(t *testing.T) {
+	const head = "`(_fn\"Oj/`IO91/G"
+	tests := []struct {
+		name, tail, comment string
+		missingSpace        bool
+	}{
+		// A !DAO! that exists only by joining across a lifted altitude is text, so the space is missing.
+		{"dao joined across an altitude", "!W1\"4e}2! hi", "!W12! hi", true},
+		{"lower-case dao joined across an altitude", "!w1\"4e}2!x", "!w12!x", true},
+		{"dao joined, no comment after", "!W3\"4e}4!", "!W34!", true},
+		// Two spaces after the locator: one separates, one is the comment's delimiter.
+		{"two spaces then a later altitude", "\"4e}  y", "y", false},
+		{"three spaces then a later altitude", "\"4e}   y", " y", false},
+		{"two spaces, then an altitude, then text", "  \"4e}z", "z", false},
+		// Two spaces after telemetry left once a later altitude is lifted.
+		{"two spaces after telemetry left by an altitude", "|!:&0hl!Y[/>\"4e}='p|  y", "y", false},
+		{"one space after telemetry left by an altitude", "|!:&0hl!Y[/>\"4e}='p| z", "z", false},
+		// Two spaces after the locator and telemetry.
+		{"two spaces after telemetry", "|!:&0'p|  y", "y", false},
+		{"three spaces after telemetry", "|!:&0'p|   y", " y", false},
+		{"two spaces after a dao", "!W12!  y", "y", false},
+	}
+	for _, tc := range tests {
+		info := head + tc.tail
+		p := aprs.Decode(aprs.MustAddress("N0CALL"), aprs.MustAddress("S32UVT"), nil, []byte(info), aprs.Lenient)
+		m, ok := p.Data.(aprs.MicEReport)
+		if !ok {
+			t.Errorf("%s: %q is not Mic-E: %v", tc.name, info, p.Data)
+			continue
+		}
+		if m.Fields.Comment != tc.comment {
+			t.Errorf("%s: comment %q, want %q", tc.name, m.Fields.Comment, tc.comment)
+		}
+		if got := hasCode(p, aprs.CodeMissingSpaceAfterLocator); got != tc.missingSpace {
+			t.Errorf("%s: missing-space-after-locator %v, want %v", tc.name, got, tc.missingSpace)
+		}
+	}
+}
