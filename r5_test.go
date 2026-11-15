@@ -112,3 +112,93 @@ func TestRunOnWeatherValueBeforeALiftedElementEndsTheWeatherText(t *testing.T) {
 		}
 	}
 }
+
+// Round 5: a garbled timestamp before an uncompressed position. When the seventh byte after the
+// DTI is z, / or h and an uncompressed position follows the seven bytes, the position is read
+// there, whatever the bytes straight after the DTI read as.
+func decodeInfo(info string, o aprs.ParseOptions) *aprs.Packet {
+	return aprs.Decode(aprs.MustAddress("N0CALL"), aprs.MustAddress("APZ001"), nil, []byte(info), o)
+}
+
+func hasCode(p *aprs.Packet, code aprs.Code) bool {
+	for _, d := range p.Diagnostics {
+		if d.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
+func TestGarbledTimestampBeforeAnUncompressedPositionReadsAfterTheSevenBytes(t *testing.T) {
+	for _, dti := range []string{"@", "/"} {
+		for _, ind := range []string{"z", "/", "h"} {
+			// R30549z2831.0 would read as a compressed position straight after the DTI.
+			info := dti + "R30549" + ind + "2831.07N/08142.92W_015/001g006t058"
+			p := decodeInfo(info, aprs.Lenient)
+			r, ok := p.Data.(aprs.PositionReport)
+			if !ok {
+				t.Fatalf("%q: %T", info, p.Data)
+			}
+			if r.Fields.Compressed || r.Timestamp != nil || r.Messaging != (dti == "@") {
+				t.Errorf("%q: compressed %v, timestamp %v, messaging %v", info, r.Fields.Compressed, r.Timestamp, r.Messaging)
+			}
+			if got := r.Fields.Position.Latitude; got < 28.51 || got > 28.52 {
+				t.Errorf("%q: latitude %v", info, got)
+			}
+			if !hasCode(p, aprs.CodeMalformedTimestamp) || p.HasErrors() {
+				t.Errorf("%q: %v", info, p.Diagnostics)
+			}
+			// Strict rejects it by the malformed timestamp.
+			s := decodeInfo(info, aprs.Strict)
+			if !s.HasErrors() || !hasCode(s, aprs.CodeMalformedTimestamp) {
+				t.Errorf("%q strict: %v", info, s.Diagnostics)
+			}
+			if _, ok := s.Data.(aprs.PositionReport); ok {
+				t.Errorf("%q strict: decoded", info)
+			}
+		}
+	}
+}
+
+func TestGarbledTimestampRuleLeavesOtherShapesAlone(t *testing.T) {
+	// A seventh byte that is not a time indicator: the compressed reading straight after the DTI stands.
+	p := decodeInfo("@R30549x2831.07N/08142.92W_", aprs.Lenient)
+	if r, ok := p.Data.(aprs.PositionReport); !ok || !r.Fields.Compressed {
+		t.Errorf("seventh byte x: %v", p.Data)
+	}
+	// A compressed position after the seven bytes does not win.
+	p = decodeInfo("@R30549z/5L!!<*e7>7P[", aprs.Lenient)
+	if r, ok := p.Data.(aprs.PositionReport); !ok || !r.Fields.Compressed || r.Timestamp != nil {
+		t.Errorf("compressed after seven: %v", p.Data)
+	}
+	// A short field cannot take the new branch.
+	for _, info := range []string{"@R30549z", "@R30549z2", "/R30549h"} {
+		decodeInfo(info, aprs.Lenient)
+	}
+}
+
+func TestGarbledTimestampPositionIsJudgedOnThePositionAlone(t *testing.T) {
+	// Lower-case hemisphere letters decode leniently, so the position after the seven bytes is read.
+	p := decodeInfo("@R30549z2831.07n/08142.92w_015/001", aprs.Lenient)
+	r, ok := p.Data.(aprs.PositionReport)
+	if !ok || r.Fields.Compressed || r.Fields.Position.Latitude < 28 || r.Fields.Position.Latitude > 29 {
+		t.Errorf("lower-case lenient: %v", p.Data)
+	}
+	if p := decodeInfo("@R30549z2831.07n/08142.92w_015/001", aprs.Strict); !p.HasErrors() {
+		t.Errorf("lower-case strict: %v", p.Diagnostics)
+	}
+	// Position ambiguity in the following position.
+	p = decodeInfo("/R30549h28  .  N/081  .  W_", aprs.Lenient)
+	r, ok = p.Data.(aprs.PositionReport)
+	if !ok || r.Fields.Compressed || r.Fields.Position.Ambiguity != 4 {
+		t.Errorf("ambiguity lenient: %v %v", p.Data, p.Diagnostics)
+	}
+	if p := decodeInfo("/R30549h28  .  N/081  .  W_", aprs.Strict); !hasCode(p, aprs.CodeMalformedTimestamp) {
+		t.Errorf("ambiguity strict: %v", p.Diagnostics)
+	}
+	// A position after the seven bytes that does not decode (longitude hemisphere X): as before.
+	p = decodeInfo("@R30549z2831.07N/08142.92X_", aprs.Lenient)
+	if r, ok := p.Data.(aprs.PositionReport); ok && !r.Fields.Compressed {
+		t.Errorf("not a position: %v", p.Data)
+	}
+}

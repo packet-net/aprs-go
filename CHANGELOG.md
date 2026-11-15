@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Round 5 of the conformance vectors (vectors submodule pinned at b118424): in a `/` or `@` report whose timestamp is not valid, when the seventh byte after the DTI is `z`, `/` or `h` and an uncompressed position follows the seven bytes (`@R30549z2831.07N/08142.92W_...`), the timestamp is garbled and the position is read after it, with `malformed-timestamp`; before, bytes such as `R30549z2831.0` could read as a compressed position straight after the DTI.
+
 ## 1.2.0 (2026-11-14)
 
 - `Device` now has a `String` method giving "vendor model" (for example `Yaesu FTM-400DR`), the same as the Python library's `str(packet.device)`. Printing a `Device` used to show the raw struct.
