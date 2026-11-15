@@ -591,6 +591,9 @@ func (p *Packet) TNC2Line() ([]byte, error) {
 // packet written inside an information field: read back by the third-party rules, and the field
 // is judged as part of the outer one.
 func (p *Packet) writeLine(depth int) ([]byte, *EncodeError) {
+	if err := p.readsAsHeld(); err != nil {
+		return nil, err
+	}
 	if depth == 0 {
 		if err := headerFault(p.Source, p.Destination, p.Path, false, p.carries); err != nil {
 			return nil, err
@@ -607,6 +610,35 @@ func (p *Packet) writeLine(depth int) ([]byte, *EncodeError) {
 		return nil, newEncodeError(RefusalTNC2CannotCarry, "a CR or LF inside the information field would end the line there: a line carries one only at its very end")
 	}
 	return append(head, p.Information...), nil
+}
+
+// isMicEIdentifier says whether a data type identifier is one that a Mic-E destination makes a
+// Mic-E report of: ` and ' (and the obsolete Rev 0 0x1C and 0x1D).
+func isMicEIdentifier(b byte) bool {
+	return b == '`' || b == '\'' || b == 0x1C || b == 0x1D
+}
+
+// readsAsHeld judges the packet's information field under the destination it is written with,
+// not under the default one: the header changes a reading only through a Mic-E destination, so
+// a field that reads as other data under this header than the data the packet holds (Mic-E bytes
+// put under a destination that makes them a Mic-E report, a Mic-E report put under one that does
+// not, or under another Mic-E one) is not-encodable. The computed destination is never
+// substituted for the one given. Only a packet that is Mic-E one way or the other is judged;
+// every other held packet is written as it stands.
+func (p *Packet) readsAsHeld() *EncodeError {
+	_, heldMicE := derefData(p.Data).(MicEReport)
+	if !heldMicE && !(len(p.Information) > 0 && isMicEIdentifier(p.Information[0])) {
+		return nil
+	}
+	for _, options := range []ParseOptions{Lenient, Strict} {
+		back := decodeInformation(newContext(options), p.Destination, p.Information)
+		var differences []string
+		nfDifferences(neutralData(expectedBack(p.Data, back)), neutralData(back), "", &differences)
+		if len(differences) == 0 {
+			return nil
+		}
+	}
+	return newEncodeError(RefusalNotEncodable, "the information field reads as other data under the destination it is written with: a Mic-E report is made by its own destination, which is not substituted for the one given")
 }
 
 // hasInnerLineBreak says whether an information field has a CR or LF before its trailing line
@@ -688,6 +720,9 @@ func (p *Packet) AX25() ([]byte, error) {
 }
 
 func (p *Packet) ax25() ([]byte, *EncodeError) {
+	if err := p.readsAsHeld(); err != nil {
+		return nil, err
+	}
 	if err := headerFault(p.Source, p.Destination, p.Path, false, p.carries); err != nil {
 		return nil, err
 	}

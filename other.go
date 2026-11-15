@@ -710,6 +710,11 @@ func encodeOther(data Data) (forms, *EncodeError) {
 		// Only the inner header of the packet being written is judged: a deeper level's header sits
 		// inside an information field, which is written as received.
 		p.note(thirdPartyHeader(levels[0]))
+		// Each inner packet's field is read under the destination it is written with: Mic-E data
+		// or Mic-E bytes under a destination that does not match them are not-encodable.
+		for _, level := range levels {
+			p.note(level.readsAsHeld())
+		}
 		for _, level := range levels {
 			p.note(innerDataFault(level.Data))
 		}

@@ -199,3 +199,52 @@ func TestOutOfOrderPathTwoLevelsDown(t *testing.T) {
 	}
 	eq(t, refusal(t, err), aprs.RefusalInvalidThirdPartyHeader)
 }
+
+// The read-back is under the header written: unrecognized data whose raw bytes are Mic-E-shaped,
+// put under a destination that makes them a Mic-E report, is not-encodable at the top and as a
+// third-party inner packet, and the same bytes under a plain destination are written.
+func TestFieldIsReadUnderTheHeaderWritten(t *testing.T) {
+	const raw = "`(_fn\"Oj/"
+	n0call := aprs.MustAddress("N0CALL")
+	// Held as a decoder holds it under a plain destination: unrecognized, with its error.
+	plain, err := aprs.DecodeTNC2([]byte("N0CALL>APZ001:"+raw), aprs.Lenient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := func(destination string) *aprs.Packet {
+		p := *plain
+		p.ThirdParty = true
+		p.Destination = aprs.MustAddress(destination)
+		return &p
+	}
+	if line, err := held("APZ001").TNC2Line(); err != nil || string(line) != "N0CALL>APZ001:"+raw {
+		t.Fatalf("the plain destination: %q, %v", line, err)
+	}
+	if _, err := aprs.Encode(aprs.ThirdParty{Packet: held("APZ001")}); err != nil {
+		t.Fatalf("the plain destination inside a third-party packet: %v", err)
+	}
+	mic := held("S32U6T")
+	_, err = mic.TNC2Line()
+	eq(t, refusal(t, err), aprs.RefusalNotEncodable)
+	_, err = mic.AX25()
+	eq(t, refusal(t, err), aprs.RefusalNotEncodable)
+	_, err = aprs.Encode(aprs.ThirdParty{Packet: mic})
+	eq(t, refusal(t, err), aprs.RefusalNotEncodable)
+	// A Mic-E report put under a plain destination is the same fault the other way.
+	heard, err := aprs.DecodeTNC2([]byte("N0CALL>S32U6T:"+raw), aprs.Lenient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := *heard
+	moved.Destination = aprs.MustAddress("APZ001")
+	_, err = moved.TNC2Line()
+	eq(t, refusal(t, err), aprs.RefusalNotEncodable)
+	if line, err := heard.TNC2Line(); err != nil || string(line) != "N0CALL>S32U6T:"+raw {
+		t.Fatalf("under its own destination: %q, %v", line, err)
+	}
+	// Inner Mic-E data under the destination it computes is written.
+	inner := &aprs.Packet{Source: n0call, Destination: aprs.MustAddress("S32U6T"), Information: []byte(raw), Data: heard.Data, ThirdParty: true}
+	if b, err := aprs.Encode(aprs.ThirdParty{Packet: inner}); err != nil || string(b) != "}N0CALL>S32U6T:"+raw {
+		t.Fatalf("inner Mic-E: %q, %v", b, err)
+	}
+}

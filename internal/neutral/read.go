@@ -1166,6 +1166,19 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 		if d != aprs.UnrecognizedEmpty {
 			return nil, toolRefused(aprs.RefusalNotEncodable, "packet.data: undecoded, and its bytes are not in the neutral form")
 		}
+	case aprs.MicEReport:
+		// Mic-E data carries half its position in the destination: the inner packet is written
+		// under the destination it computes, and one given that differs is not substituted: the
+		// field would read as other data under the header, not-encodable.
+		made, perr := aprs.NewPacket(aprs.MustAddress("N0CALL"), destination, nil, d)
+		if perr != nil {
+			e := perr.(*aprs.EncodeError)
+			return nil, refused(e.Code(), "the inner packet's data: "+e.Error())
+		}
+		if made.Destination != destination {
+			return nil, toolRefused(aprs.RefusalNotEncodable, "the inner Mic-E data computes the destination "+made.Destination.String()+", not "+destination.String())
+		}
+		information = made.Information
 	default:
 		info, eerr := aprs.Encode(data)
 		if eerr != nil {

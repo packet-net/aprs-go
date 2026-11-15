@@ -614,6 +614,24 @@ func passThroughInnerCheck(c vectorCase) []string {
 
 func passThrough(want map[string]any, packet *aprs.Packet, name string) []string {
 	var out []string
+	// With a header, the held packet's information field is written under that header instead.
+	if h, ok := want["header"].(map[string]any); ok {
+		readdressed := *packet
+		if v, ok := h["source"].(string); ok {
+			readdressed.Source = mustAddress(v)
+		}
+		if v, ok := h["destination"].(string); ok {
+			readdressed.Destination = mustAddress(v)
+		}
+		if list, ok := h["path"].([]any); ok {
+			readdressed.Path = nil
+			for _, e := range list {
+				entry, _ := neutral.ReadPathEntry(e.(string))
+				readdressed.Path = append(readdressed.Path, entry)
+			}
+		}
+		packet = &readdressed
+	}
 	compare := func(form string, got []byte, err error, hexForm bool) {
 		refusal, wantsRefusal := want[form+"_refusal"].(string)
 		text, wantsBytes := want[map[bool]string{true: form + "_hex", false: form}[hexForm]].(string)
@@ -677,4 +695,12 @@ func readbackCheck(c vectorCase) []string {
 	var out []string
 	neutral.Differences(any(written), any(neutral.Data(data)), "readback", &out)
 	return out
+}
+
+func mustAddress(text string) aprs.Address {
+	a, err := aprs.NewAddress(text)
+	if err != nil {
+		panic(err)
+	}
+	return a
 }
