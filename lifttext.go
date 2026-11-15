@@ -47,12 +47,18 @@ func (t *liftedText) whole(from, to int) bool {
 	return true
 }
 
-// pieceEnd gives where the run that holds b[at] ends.
-func (t *liftedText) pieceEnd(at int) int {
-	for i := at + 1; i < len(t.b); i++ {
+// pieceEnd gives where the run that holds b[at] ends, looking no further than max bytes on: a
+// reader that takes at most max bytes need not know more, and a scan to the end of the text for
+// every candidate would be quadratic on a long run of them.
+func (t *liftedText) pieceEnd(at, max int) int {
+	limit := len(t.b)
+	if at+max < limit {
+		limit = at + max
+	}
+	for i := at + 1; i < limit; i++ {
 		if t.cut[i] != 0 {
 			return i
 		}
 	}
-	return len(t.b)
+	return limit
 }

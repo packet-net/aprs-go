@@ -317,7 +317,19 @@ func micEStatus(ctx *context, report *MicEReport, b []byte, offset int) bool {
 	// never made of the bytes either side of it. A strict decoder reads it as text.
 	t := newLiftedText(s)
 	if !firstOK {
+		// A run that shares a byte with a /A= standing whole is skipped, as a locator's bytes
+		// and a PHG's at the start are: altitudeEnd is where the last whole /A= that starts at or
+		// before the run's last byte ends.
+		altitudeEnd, scanned := 0, 0
 		for i := 0; i+3 < len(s); i++ {
+			for ; scanned <= i+3 && scanned+9 <= len(s); scanned++ {
+				if wholeAltitudeAt(s, scanned) {
+					altitudeEnd = scanned + 9
+				}
+			}
+			if altitudeEnd > i {
+				continue
+			}
 			if _, ok := micEAltitude(s[i:]); !ok {
 				continue
 			}
@@ -339,6 +351,16 @@ func micEStatus(ctx *context, report *MicEReport, b []byte, offset int) bool {
 		report.Fields.AltitudeFeet = altitudeBefore
 	}
 	return ok
+}
+
+// wholeAltitudeAt says whether s[i:] starts with a /A= altitude as findAltitude reads it: /A=
+// and six digits, or - and five.
+func wholeAltitudeAt(s []byte, i int) bool {
+	if i+9 > len(s) || string(s[i:i+3]) != "/A=" {
+		return false
+	}
+	w := s[i+3 : i+9]
+	return allDigits(w) || (w[0] == '-' && allDigits(w[1:]))
 }
 
 // micEAltitude reads a Mic-E altitude, xxx}, at the start of s, in feet.

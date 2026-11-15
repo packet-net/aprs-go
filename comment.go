@@ -316,7 +316,13 @@ func braces(fields *Positioned, t *liftedText) {
 		if c[i] != '{' {
 			continue
 		}
-		j := indexByte(c[i+1:], '}')
+		// The closing brace is within the next four bytes (1-3 characters between), so look no
+		// further: a search to the end for every { is quadratic on a long run of them.
+		window := c[i+1:]
+		if len(window) > 4 {
+			window = window[:4]
+		}
+		j := indexByte(window, '}')
 		if j < 0 {
 			continue
 		}
@@ -339,6 +345,9 @@ func braces(fields *Positioned, t *liftedText) {
 	t.lift(open, closing+1, cutOther)
 }
 
+// maxExtensionLen is the longest data extension: PHGphgd with a beacon rate and its slash.
+const maxExtensionLen = 9
+
 // lateExtension reads a PHG, RNG or DFS extension after other comment text instead of straight
 // after the symbol: the first well-formed PHG, else the first well-formed RNG, else the first
 // well-formed DFS. A malformed one such as PHG12 is comment text and does not stop the search
@@ -354,8 +363,9 @@ func lateExtension(ctx *context, fields *Positioned, t *liftedText, offset int) 
 				continue
 			}
 			found = Positioned{}
-			// The extension is one run: its bytes end where something was lifted from.
-			if l, ok := stationExtension(&found, c[i:t.pieceEnd(i)]); ok {
+			// The extension is one run: its bytes end where something was lifted from. It is at
+			// most 9 bytes (a PHG with a beacon rate), so no scan goes further.
+			if l, ok := stationExtension(&found, c[i:t.pieceEnd(i, maxExtensionLen)]); ok {
 				at, n = i, l
 				break
 			}
