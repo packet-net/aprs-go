@@ -365,11 +365,10 @@ func integerOf[T integer](k *keys, key string) (*T, *Unreadable) {
 			var zero T
 			return &zero, nil
 		}
-		if x != math.Trunc(x) {
-			k.c.note(aprs.RefusalValueOutOfRange, k.name(key)+": not a whole number")
-			var zero T
-			return &zero, nil
-		}
+		// Whole, but outside what this package's integer holds: outside the field, so the rule's code.
+		k.c.note(aprs.RefusalValueOutOfRange, k.name(key)+": not a whole number, or outside its field")
+		var zero T
+		return &zero, nil
 	}
 	return nil, unsupported("%s: not a whole number in the range this package holds", k.name(key))
 }
@@ -1071,7 +1070,7 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 	}
 	source, serr := aprs.ThirdPartySource(sourceText)
 	if serr != nil {
-		return nil, unsupported("packet.source: not a third-party source")
+		return nil, toolRefused(aprs.RefusalInvalidThirdPartyHeader, "packet.source: not a third-party source")
 	}
 	destinationText, err := p.text("destination")
 	if err != nil {
@@ -1082,7 +1081,7 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 	}
 	destination, derr := aprs.NewAddress(destinationText)
 	if derr != nil {
-		return nil, unsupported("packet.destination: not an address")
+		return nil, toolRefused(aprs.RefusalInvalidThirdPartyHeader, "packet.destination: not an address")
 	}
 	pathTexts, err := p.strings("path")
 	if err != nil {
@@ -1458,8 +1457,17 @@ func readPositioned(o *keys) (aprs.Positioned, *Unreadable) {
 					n, ok = 0, true
 				}
 			}
-			if !ok || n < 0 || n > 65535 {
-				return f, unsupported("telemetry.analog: each is a whole number, 0-65535")
+			if ok && (n < 0 || n > 65535) {
+				o.c.note(aprs.RefusalValueOutOfRange, "telemetry.analog: outside 0-65535")
+				n = 0
+			}
+			if !ok {
+				if _, isNum := asFloat(x); isNum {
+					o.c.note(aprs.RefusalValueOutOfRange, "telemetry.analog: outside 0-65535")
+					n, ok = 0, true
+				} else {
+					return f, unsupported("telemetry.analog: each is a number")
+				}
 			}
 			telemetry.Analog = append(telemetry.Analog, uint16(n))
 		}
