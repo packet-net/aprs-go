@@ -162,11 +162,11 @@ func (c *collector) first() *Unreadable {
 
 // refusalOrder is the README's Refusal reasons order.
 var refusalOrder = []string{
-	"not-encodable", "invalid-address", "ax25-cannot-carry", "tnc2-cannot-carry", "invalid-third-party-header",
+	"not-encodable", "invalid-address", "invalid-third-party-header",
 	"invalid-addressee", "invalid-name", "invalid-timestamp", "not-a-number", "value-out-of-range", "value-has-no-form",
 	"invalid-code", "invalid-symbol", "invalid-character", "too-long", "padding-space", "malformed", "invalid-message-id",
 	"invalid-nmea", "extension-conflict", "field-not-allowed", "symbol-mismatch", "missing-field", "value-given-twice",
-	"text-reads-as-field", "does-not-read-back", "information-field-too-long",
+	"text-reads-as-field", "does-not-read-back", "ax25-cannot-carry", "tnc2-cannot-carry", "information-field-too-long",
 }
 
 // RefusalRank is a code's place in the Refusal reasons order.

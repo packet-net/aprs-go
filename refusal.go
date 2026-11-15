@@ -125,13 +125,12 @@ func refusalForValue(x float64) RefusalCode {
 // refusalOrder is the order in which a refusal with several faults names its code (the vectors
 // README, Refusal reasons): the first code that applies.
 var refusalOrder = [...]RefusalCode{
-	RefusalNotEncodable, RefusalInvalidAddress, RefusalAX25CannotCarry, RefusalTNC2CannotCarry,
-	RefusalInvalidThirdPartyHeader, RefusalInvalidAddressee, RefusalInvalidName, RefusalInvalidTimestamp,
+	RefusalNotEncodable, RefusalInvalidAddress, RefusalInvalidThirdPartyHeader, RefusalInvalidAddressee, RefusalInvalidName, RefusalInvalidTimestamp,
 	RefusalNotANumber, RefusalValueOutOfRange, RefusalValueHasNoForm, RefusalInvalidCode, RefusalInvalidSymbol,
 	RefusalInvalidCharacter, RefusalTooLong, RefusalPaddingSpace, RefusalMalformed, RefusalInvalidMessageID,
 	RefusalInvalidNMEA, RefusalExtensionConflict, RefusalFieldNotAllowed, RefusalSymbolMismatch,
 	RefusalMissingField, RefusalValueGivenTwice, RefusalTextReadsAsField, RefusalDoesNotReadBack,
-	RefusalInformationFieldTooLong,
+	RefusalAX25CannotCarry, RefusalTNC2CannotCarry, RefusalInformationFieldTooLong,
 }
 
 func (c RefusalCode) rank() int {

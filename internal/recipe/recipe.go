@@ -191,8 +191,8 @@ type Written struct {
 
 // Write builds a recipe and writes the packet as a TNC2 line, or as an AX.25 frame when frame is
 // set. The header is read back by the library's writers, so a path they cannot carry is refused
-// there (tnc2-cannot-carry, ax25-cannot-carry); and as the header is written first in the refusal
-// order, that refusal outranks a fault in the data the builder found.
+// there (tnc2-cannot-carry, ax25-cannot-carry). A data fault the builder found comes first in the
+// refusal order; only the size refusal, which is last, gives way to a header the form cannot carry.
 func Write(input map[string]any, frame bool) Written {
 	o := Build(input)
 	if o.Unsupported != "" {
