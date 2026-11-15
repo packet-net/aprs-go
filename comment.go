@@ -650,30 +650,37 @@ func findAltitude(t *liftedText) (int, int32, bool) {
 	return 0, 0, false
 }
 
-// findTelemetry finds base-91 comment telemetry |ss11...|: 2-7 pairs between bars.
+// findTelemetry finds base-91 comment telemetry |ss11...|: 2-7 pairs between bars. The bars are
+// taken in pairs from the start: a bar and the next one that enclose a valid block (4 to 14 bytes,
+// an even number, each 0x21 to 0x7B, whole as sent) make a block, and both bars are used; otherwise
+// the bar is text and the next one is looked at. The LAST block found is the telemetry, whatever
+// text and bars follow it (vectors README, Comments; aprs-vectors#32); no block means the bars
+// are text. Each pair is looked at for at most 14 bytes, so the search is linear in the comment.
 func findTelemetry(t *liftedText) (span, CommentTelemetry, bool) {
 	c := t.b
-	// Only the last two bars are considered: telemetry goes at the end of the comment.
-	end := lastIndexByte(c, '|')
-	if end < 0 {
-		return span{}, CommentTelemetry{}, false
+	start, end := -1, -1
+	for i := indexByte(c, '|'); i >= 0; {
+		next := indexByte(c[i+1:], '|')
+		if next < 0 {
+			break
+		}
+		next += i + 1
+		if n := next - i - 1; n >= 4 && n <= 14 && n%2 == 0 && allBase91(c[i+1:next]) && t.whole(i, next+1) {
+			start, end = i, next
+			// Both bars are used: the next pair starts after this one.
+			rest := indexByte(c[next+1:], '|')
+			if rest < 0 {
+				break
+			}
+			i = next + 1 + rest
+			continue
+		}
+		i = next
 	}
-	start := lastIndexByte(c[:end], '|')
 	if start < 0 {
 		return span{}, CommentTelemetry{}, false
 	}
 	inner := c[start+1 : end]
-	if !t.whole(start, end+1) {
-		return span{}, CommentTelemetry{}, false
-	}
-	if len(inner) < 4 || len(inner) > 14 || len(inner)%2 != 0 {
-		return span{}, CommentTelemetry{}, false
-	}
-	for _, b := range inner {
-		if !isBase91(b) {
-			return span{}, CommentTelemetry{}, false
-		}
-	}
 	values := make([]uint16, 0, len(inner)/2)
 	for i := 0; i < len(inner); i += 2 {
 		v, _ := base91Decode(inner[i : i+2])
@@ -878,4 +885,14 @@ func microwavePrefix(letter byte) (uint32, bool) {
 		}
 	}
 	return 0, false
+}
+
+// allBase91 says whether every byte is a base-91 character, 0x21 to 0x7B.
+func allBase91(b []byte) bool {
+	for _, c := range b {
+		if !isBase91(c) {
+			return false
+		}
+	}
+	return true
 }

@@ -1,4 +1,5 @@
 # Checks the vectors runner skips on purpose, one per line: the check name (<check>::<case id>),
 # then the reason. Each runs as a skipped test with its reason.
 #
-# None at present.
+lenient::corpus/1232 R27 (aprs-vectors#32): the text holds a valid block, |!+&P'i|, before its !DAO!, so the rule gives it as telemetry; the case still expects the old reading (aprs-py and aprs-rs read it the same way)
+reencode::corpus/1232 same as lenient::corpus/1232

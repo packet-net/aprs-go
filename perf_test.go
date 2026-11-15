@@ -14,7 +14,7 @@ import (
 // that grows with its size, never with its square. The test compares the time at two sizes (a
 // ratio), not a wall-clock limit: four times the bytes may take about four times as long, and a
 // quadratic search takes sixteen.
-var hostileElements = []string{"{", "PHG1", "|!!|", "/A=000001", "!W12!", "\"4e}", "RNG1", "DFS1", "}", "/A=", "|", "!"}
+var hostileElements = []string{"{", "||", "|a|", "|!!!!|x", "|!!!!|!!", "PHG1", "|!!|", "/A=000001", "!W12!", "\"4e}", "RNG1", "DFS1", "}", "/A=", "|", "!"}
 
 var hostileReports = []struct{ name, prefix string }{
 	{"position", "N0CALL>APRS:!4903.50N/07201.75W-"},
