@@ -534,26 +534,48 @@ func encodeCheck(c vectorCase) []string {
 }
 
 func buildCheck(c vectorCase) []string {
-	input := c["input"].(map[string]any)["build"].(map[string]any)
+	in := c["input"].(map[string]any)
+	input := in["build"].(map[string]any)
 	expect := c["expect"].(map[string]any)
 	wantRefused, _ := expect["refused"].(bool)
-	o := recipe.Build(input)
+	// "write": "ax25" writes the packet built as an AX.25 frame (KISS form, no flags, no FCS),
+	// compared as bytes with expect.ax25_hex; otherwise it is a TNC2 line.
+	frame := false
+	if w, ok := in["write"]; ok {
+		if w != "ax25" {
+			return []string{fmt.Sprintf("build: this runner does not know \"write\": %v", w)}
+		}
+		frame = true
+	}
+	o := recipe.Write(input, frame)
+	wantText := func() any {
+		if frame {
+			return expect["ax25_hex"]
+		}
+		return expect["tnc2"]
+	}
 	switch {
 	case o.Unsupported != "":
 		return []string{"build: this package's builders cannot say it: " + o.Unsupported}
 	case o.Refusal != "":
 		if !wantRefused {
-			return []string{fmt.Sprintf("build: expected %s, but the builder refused: %s (%s)", neutral.Show(expect["tnc2"]), o.Refusal, o.Reason)}
+			return []string{fmt.Sprintf("build: expected %s, but the builder refused: %s (%s)", neutral.Show(wantText()), o.Refusal, o.Reason)}
 		}
 		if want, ok := expect["refusal"].(string); ok && o.Refusal != want {
 			return []string{fmt.Sprintf("build: refused with %s (%s), expected %s", o.Refusal, o.Reason, want)}
 		}
 		return nil
 	case wantRefused:
-		return []string{"build: expected a refusal, built " + show(o.Packet.TNC2())}
+		return []string{"build: expected a refusal, built " + show(o.Bytes)}
 	}
-	if got := string(o.Packet.TNC2()); got != expect["tnc2"].(string) {
-		return []string{fmt.Sprintf("build: expected %s, built %s", neutral.Show(expect["tnc2"]), show(o.Packet.TNC2()))}
+	if frame {
+		if got := strings.ToUpper(hex.EncodeToString(o.Bytes)); got != strings.ToUpper(expect["ax25_hex"].(string)) {
+			return []string{fmt.Sprintf("build: expected frame %s, built %s", neutral.Show(expect["ax25_hex"]), got)}
+		}
+		return nil
+	}
+	if got := string(o.Bytes); got != expect["tnc2"].(string) {
+		return []string{fmt.Sprintf("build: expected %s, built %s", neutral.Show(expect["tnc2"]), show(o.Bytes))}
 	}
 	return nil
 }

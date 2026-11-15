@@ -459,7 +459,7 @@ func TestParseOptionsZeroValueIsLenientAndEveryCodeIsSafe(t *testing.T) {
 // To and Via keep the station on an error, and an empty address is never written.
 func TestAnEmptyAddressIsRefused(t *testing.T) {
 	base := me(t)
-	via, err := base.Via("WIDE1-1", "bad*")
+	via, err := base.Via("WIDE1-1", "bad entry*")
 	if err == nil || via.String() != base.String() {
 		t.Errorf("Via gave %s, %v", via, err)
 	}

@@ -528,7 +528,7 @@ func decodeAgrelo(ctx *context, info []byte) Data {
 	return AgreloDF{BearingDegrees: uint16(digits(info[1:4])), Quality: info[5] - '0'}
 }
 
-func encodeOther(data Data) ([]byte, *EncodeError) {
+func encodeOther(data Data) (forms, *EncodeError) {
 	printable := func(t, what string) *EncodeError {
 		if hasControl(t) {
 			return newEncodeError(RefusalInvalidCharacter, what+" cannot contain a control character")
@@ -573,16 +573,11 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 		p.run(err)
 		out = writeWeatherFields(out, &d.Weather, p)
 		if err := p.finish(); err != nil {
-			return nil, err
-		}
-		// The software type and unit, and the extra fields, must not read back as fields.
-		back, ok := decodePositionlessWeather(newContext(Lenient), out).(WeatherReport)
-		if !ok || !sameWeatherText(&back.Weather, &d.Weather) {
-			return nil, newEncodeError(RefusalTextReadsAsField, "the weather does not read back as given: a software type and unit, or an extra field, that would read as weather fields")
+			return forms{}, err
 		}
 	case RawWeather:
 		if !isPrintableASCII([]byte(d.Data)) {
-			return nil, newEncodeError(RefusalInvalidCharacter, "raw weather station data is printable ASCII")
+			return forms{}, newEncodeError(RefusalInvalidCharacter, "raw weather station data is printable ASCII")
 		}
 		switch d.Format {
 		case PeetBrosHash:
@@ -604,7 +599,7 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 		}
 		p.run(printable(d.Comment, "a beacon comment"))
 		if err := p.finish(); err != nil {
-			return nil, err
+			return forms{}, err
 		}
 		out = append(out, '[')
 		out = append(out, asciiUpper(d.Locator)...)
@@ -636,11 +631,11 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 			out = append(out, fmt.Sprintf("%s,%s,%04d", latitude, longitude, toU32(radius))...)
 		}
 		if err := p.finish(); err != nil {
-			return nil, err
+			return forms{}, err
 		}
 	case Capabilities:
 		if len(d.Capabilities) == 0 {
-			return nil, newEncodeError(RefusalMissingField, "a capabilities report lists at least one token")
+			return forms{}, newEncodeError(RefusalMissingField, "a capabilities report lists at least one token")
 		}
 		// What would not read back the same: a token is fixed-form, a value is free text whose
 		// spaces around it would be taken for padding.
@@ -660,7 +655,7 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 			}
 		}
 		if err := p.finish(); err != nil {
-			return nil, err
+			return forms{}, err
 		}
 		out = append(out, '<')
 		for i, c := range d.Capabilities {
@@ -696,7 +691,7 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 			}
 			depth++
 			if depth > maxThirdPartyDepth {
-				return nil, newEncodeError(RefusalInvalidThirdPartyHeader, "third-party packets nest at most four deep")
+				return forms{}, newEncodeError(RefusalInvalidThirdPartyHeader, "third-party packets nest at most four deep")
 			}
 			if tp.Packet == nil {
 				break
@@ -704,54 +699,58 @@ func encodeOther(data Data) ([]byte, *EncodeError) {
 			cur = tp.Packet.Data
 		}
 		if d.Packet == nil {
-			return nil, newEncodeError(RefusalMissingField, "a third-party packet carries a packet")
+			return forms{}, newEncodeError(RefusalMissingField, "a third-party packet carries a packet")
 		}
 		if err := thirdPartyHeader(d.Packet); err != nil {
-			return nil, err
+			return forms{}, err
 		}
 		out = append(out, '}')
-		out = append(out, d.Packet.TNC2()...)
+		line, lineErr := d.Packet.tnc2Line()
+		if lineErr != nil {
+			return forms{}, newEncodeError(RefusalInvalidThirdPartyHeader, "the third-party packet's header cannot be written: "+lineErr.message)
+		}
+		out = append(out, line...)
 		// The information field is written as received; only a line break at its very end would
 		// not read back.
 		if last := out[len(out)-1]; last == '\r' || last == '\n' {
-			return nil, newEncodeError(RefusalInvalidCharacter, "a third-party packet's information field cannot end with a line break")
+			return forms{}, newEncodeError(RefusalInvalidCharacter, "a third-party packet's information field cannot end with a line break")
 		}
 	case UserDefined:
 		// APRS12c ch. 19 puts no restriction on user-defined data, these two characters included:
 		// any byte is written back as it came.
 		if d.UserID < 0 || d.UserID > 0xFF || d.PacketType < 0 || d.PacketType > 0xFF {
-			return nil, newEncodeError(RefusalValueOutOfRange, "the user ID and packet type are one byte each (U+0000 to U+00FF)")
+			return forms{}, newEncodeError(RefusalValueOutOfRange, "the user ID and packet type are one byte each (U+0000 to U+00FF)")
 		}
 		out = append(out, '{', byte(d.UserID), byte(d.PacketType))
 		out = append(out, d.Data...)
 		// A line break at the very end would be taken for the end of the line and dropped.
 		if last := out[len(out)-1]; last == '\r' || last == '\n' {
-			return nil, newEncodeError(RefusalInvalidCharacter, "user-defined data cannot end with a line break, which would not read back")
+			return forms{}, newEncodeError(RefusalInvalidCharacter, "user-defined data cannot end with a line break, which would not read back")
 		}
 	case TestData:
 		// Test data is data, not text: only a line break would not read back.
 		if hasLineBreak([]byte(d.Data)) {
-			return nil, newEncodeError(RefusalInvalidCharacter, "test data cannot contain a line break")
+			return forms{}, newEncodeError(RefusalInvalidCharacter, "test data cannot contain a line break")
 		}
 		out = append(out, ',')
 		out = append(out, d.Data...)
 	case AgreloDF:
 		if d.BearingDegrees > 360 || d.Quality > 9 {
-			return nil, newEncodeError(RefusalValueOutOfRange, "an Agrelo bearing is 0-360 and the quality 0-9")
+			return forms{}, newEncodeError(RefusalValueOutOfRange, "an Agrelo bearing is 0-360 and the quality 0-9")
 		}
 		out = append(out, fmt.Sprintf("%%%03d/%d", d.BearingDegrees, d.Quality)...)
 	case Unrecognized:
-		return nil, newEncodeError(RefusalNotEncodable, "undecoded data has nothing to encode")
+		return forms{}, newEncodeError(RefusalNotEncodable, "undecoded data has nothing to encode")
 	default:
-		return nil, newEncodeError(RefusalNotEncodable, "not one of the other data types")
+		return forms{}, newEncodeError(RefusalNotEncodable, "not one of the other data types")
 	}
-	return out, nil
+	return onlyForm(out), nil
 }
 
 // encodeNMEA writes $, the sentence and its comment, when they read back as given: the sentence
 // well formed, its checksum (if any) right and ending it, a comment only after a checksum, and
 // every field given agreeing with what the sentence says.
-func encodeNMEA(n *NMEA) ([]byte, *EncodeError) {
+func encodeNMEA(n *NMEA) (forms, *EncodeError) {
 	p := &pending{}
 	sentence := []byte(n.Sentence)
 	// A number that is not one is named before anything else about the sentence.
@@ -800,12 +799,12 @@ func encodeNMEA(n *NMEA) ([]byte, *EncodeError) {
 		}
 	}
 	if err := p.finish(); err != nil {
-		return nil, err
+		return forms{}, err
 	}
 	out := make([]byte, 0, 1+len(sentence)+len(n.Comment))
 	out = append(out, '$')
 	out = append(out, sentence...)
-	return append(out, n.Comment...), nil
+	return onlyForm(append(out, n.Comment...)), nil
 }
 
 // thirdPartyHeader checks that a third-party packet's header can be written so that it reads

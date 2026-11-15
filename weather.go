@@ -428,24 +428,6 @@ func softwareAndUnit(rest []byte, w *Weather) bool {
 	return true
 }
 
-// sameWeatherText compares the parts of weather that are text rather than numbers: the software
-// type, the unit and the extra fields. Written back, they must read back the same, and not as
-// fields (h89b1 as a software type and unit would read back as humidity).
-func sameWeatherText(a, b *Weather) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	if !samePtr(a.Software, b.Software) || !samePtr(a.Unit, b.Unit) || len(a.Extra) != len(b.Extra) {
-		return false
-	}
-	for i := range a.Extra {
-		if a.Extra[i] != b.Extra[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // samePtr compares two optional values.
 func samePtr[T comparable](a, b *T) bool {
 	if a == nil || b == nil {
@@ -541,6 +523,9 @@ func writeWeatherFields(out []byte, w *Weather, p *pending) []byte {
 		out = append(out, byte(*w.Software))
 		out = append(out, *w.Unit...)
 	case w.Software == nil && w.Unit == nil:
+	case w.Software == nil || w.Unit == nil:
+		// The Weather rule makes the software type and its unit one thing.
+		p.note(newEncodeError(RefusalMissingField, "a weather software type goes with its unit, and a unit with its software type"))
 	default:
 		p.note(newEncodeError(RefusalTextReadsAsField, "weather software is a letter, and the unit 2-4 letters, digits, - or _, not all digits"))
 	}

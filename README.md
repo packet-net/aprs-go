@@ -6,7 +6,7 @@ Conforms to [aprs-vectors](https://github.com/packet-net/aprs-vectors) 1.2: ever
 
 - **Decoding never fails because of the information field.** Every deviation from the spec becomes a `Diagnostic` with a stable `Code`, and the rest of the packet is still read where it can be.
 - **Strict or lenient, one defect at a time.** `ParseOptions` says which of the 33 tolerable defects to accept. `aprs.Lenient` (the zero value) accepts them all, each with a warning; `aprs.Strict` accepts none; any single one can be switched off.
-- **The encoder writes only what the spec allows.** It checks what it wrote by decoding it again: a comment that would read back as something else, such as an altitude or a `!DAO!`, is escaped or refused, never silently changed.
+- **The encoder reads back what it writes.** Every call that writes bytes from data ends in one read-back: it decodes what it wrote, leniently, and checks it is the data given (no warning or error, every field the same, a number held in steps compared with the value given rounded once to the step written), so a comment that would read back as something else, such as an altitude or a `!DAO!`, is written in another equivalent form or refused, never silently changed. It never returns bytes that failed, and a header it writes (`TNC2`, `AX25`, `KISS`) is read back the same way.
 
 ## Install
 

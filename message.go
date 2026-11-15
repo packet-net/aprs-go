@@ -477,7 +477,17 @@ func isBulletinAddressee(a string) bool {
 	return ok && bulletin
 }
 
-func encodeMessage(data Data) ([]byte, *EncodeError) {
+// nonEmpty is an optional text with an empty one taken for none: the data form leaves an empty
+// string out, so a message ID or a directed query's target given empty is none (vectors README,
+// Read-back, the third allowance).
+func nonEmpty(v *string) *string {
+	if v == nil || *v == "" {
+		return nil
+	}
+	return v
+}
+
+func encodeMessage(data Data) (forms, *EncodeError) {
 	var out []byte
 	p := &pending{}
 	switch d := data.(type) {
@@ -488,21 +498,21 @@ func encodeMessage(data Data) ([]byte, *EncodeError) {
 			p.note(newEncodeError(RefusalInvalidAddressee, "an addressee of NWS-, NWS_ or BLN and a bulletin form makes a bulletin, not a message"))
 		}
 		out = messageText(out, d.Text, true, p)
-		out = idAndReply(out, d.MessageID, d.ReplyAck, p)
+		out = idAndReply(out, nonEmpty(d.MessageID), d.ReplyAck, p)
 	case Ack:
 		out = writeAddressee(out, d.Addressee, p)
-		out = ackOrReject(out, "ack", d.AckedID, d.MessageID, d.ReplyAck, p)
+		out = ackOrReject(out, "ack", d.AckedID, nonEmpty(d.MessageID), d.ReplyAck, p)
 	case Reject:
 		out = writeAddressee(out, d.Addressee, p)
-		out = ackOrReject(out, "rej", d.RejectedID, d.MessageID, d.ReplyAck, p)
+		out = ackOrReject(out, "rej", d.RejectedID, nonEmpty(d.MessageID), d.ReplyAck, p)
 	case Bulletin:
-		out = encodeBulletin(out, d.Addressee, d.Text, d.MessageID, false, p)
+		out = encodeBulletin(out, d.Addressee, d.Text, nonEmpty(d.MessageID), false, p)
 	case NWSBulletin:
-		out = encodeBulletin(out, d.Addressee, d.Text, d.MessageID, true, p)
+		out = encodeBulletin(out, d.Addressee, d.Text, nonEmpty(d.MessageID), true, p)
 	case TelemetryNames:
-		out = encodeLabels(out, d.Addressee, "PARM.", d.Names, d.MessageID, p)
+		out = encodeLabels(out, d.Addressee, "PARM.", d.Names, nonEmpty(d.MessageID), p)
 	case TelemetryUnits:
-		out = encodeLabels(out, d.Addressee, "UNIT.", d.Units, d.MessageID, p)
+		out = encodeLabels(out, d.Addressee, "UNIT.", d.Units, nonEmpty(d.MessageID), p)
 	case TelemetryCoefficients:
 		if len(d.Coefficients) > 15 {
 			p.note(newEncodeError(RefusalTooLong, "telemetry equations are up to 15 numbers (APRS12c ch. 13)"))
@@ -520,7 +530,7 @@ func encodeMessage(data Data) ([]byte, *EncodeError) {
 		out = writeAddressee(out, d.Addressee, p)
 		out = append(out, "EQNS."...)
 		out = append(out, strings.Join(texts, ",")...)
-		out = idAndReply(out, d.MessageID, nil, p)
+		out = idAndReply(out, nonEmpty(d.MessageID), nil, p)
 	case TelemetryBits:
 		if strings.ContainsRune(d.Project, '{') || hasControl(d.Project) {
 			p.note(newEncodeError(RefusalInvalidCharacter, "a telemetry project title has no { or control character (APRS12c ch. 13)"))
@@ -538,7 +548,7 @@ func encodeMessage(data Data) ([]byte, *EncodeError) {
 			out = append(out, ',')
 			out = append(out, d.Project...)
 		}
-		out = idAndReply(out, d.MessageID, nil, p)
+		out = idAndReply(out, nonEmpty(d.MessageID), nil, p)
 	case DirectedQuery:
 		if !queryTypeOK(d.QueryType) {
 			p.note(newEncodeError(RefusalInvalidCode, "a directed query type is upper-case letters: ?APRSD, ?APRSH, ?APRSM, ?APRSO, ?APRSP, ?APRSS, ?APRST, ?PING? or one the spec does not define (APRS12c ch. 15)"))
@@ -546,8 +556,8 @@ func encodeMessage(data Data) ([]byte, *EncodeError) {
 		out = writeAddressee(out, d.Addressee, p)
 		out = append(out, '?')
 		out = append(out, d.QueryType...)
-		if d.Target != nil {
-			t := *d.Target
+		if target := nonEmpty(d.Target); target != nil {
+			t := *target
 			if !isValidAddress(t) {
 				p.note(newEncodeError(RefusalInvalidAddressee, "a directed query's target is one callsign: 1-9 letters, digits or -"))
 			}
@@ -565,31 +575,12 @@ func encodeMessage(data Data) ([]byte, *EncodeError) {
 			}
 		}
 	default:
-		return nil, newEncodeError(RefusalNotEncodable, "not a message")
+		return forms{}, newEncodeError(RefusalNotEncodable, "not a message")
 	}
 	if err := p.finish(); err != nil {
-		return nil, err
+		return forms{}, err
 	}
-	// What was written must read back as what was given: a message whose text looks like an ack,
-	// telemetry metadata or a query, or whose addressee makes it a bulletin, would not.
-	back := decodeMessage(newContext(Lenient), out)
-	if !sameMessageData(back, data) {
-		// An addressee that makes a bulletin of it is not the form this report needs.
-		var to *string
-		switch d := data.(type) {
-		case Message:
-			to = &d.Addressee
-		case Ack:
-			to = &d.Addressee
-		case Reject:
-			to = &d.Addressee
-		}
-		if to != nil && isBulletinAddressee(*to) {
-			return nil, newEncodeError(RefusalInvalidAddressee, "an addressee of NWS-, NWS_ or BLN and a bulletin form makes a bulletin, not this report")
-		}
-		return nil, newEncodeError(RefusalTextReadsAsField, "it would read back as something else: text that reads as an ack, telemetry metadata or a query, or an addressee that makes it a bulletin")
-	}
-	return out, nil
+	return onlyForm(out), nil
 }
 
 func encodeBulletin(out []byte, addressee, text string, messageID *string, isNWS bool, p *pending) []byte {
@@ -711,66 +702,4 @@ func ackOrReject(out []byte, kind, id string, messageID, replyAck *string, p *pe
 		out = append(out, r...)
 	}
 	return out
-}
-
-func sameStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func sameFloats(a, b []float64) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// sameMessageData compares two message-like data as the encoder's read-back does: the
-// coefficients' text as sent is not compared.
-func sameMessageData(a, b Data) bool {
-	switch x := a.(type) {
-	case Message:
-		y, ok := b.(Message)
-		return ok && x.Addressee == y.Addressee && x.Text == y.Text && samePtr(x.MessageID, y.MessageID) && samePtr(x.ReplyAck, y.ReplyAck)
-	case Ack:
-		y, ok := b.(Ack)
-		return ok && x.Addressee == y.Addressee && x.AckedID == y.AckedID && samePtr(x.MessageID, y.MessageID) && samePtr(x.ReplyAck, y.ReplyAck)
-	case Reject:
-		y, ok := b.(Reject)
-		return ok && x.Addressee == y.Addressee && x.RejectedID == y.RejectedID && samePtr(x.MessageID, y.MessageID) && samePtr(x.ReplyAck, y.ReplyAck)
-	case Bulletin:
-		y, ok := b.(Bulletin)
-		return ok && x.Addressee == y.Addressee && x.Text == y.Text && samePtr(x.MessageID, y.MessageID)
-	case NWSBulletin:
-		y, ok := b.(NWSBulletin)
-		return ok && x.Addressee == y.Addressee && x.Text == y.Text && samePtr(x.MessageID, y.MessageID)
-	case TelemetryNames:
-		y, ok := b.(TelemetryNames)
-		return ok && x.Addressee == y.Addressee && sameStrings(x.Names, y.Names) && samePtr(x.MessageID, y.MessageID)
-	case TelemetryUnits:
-		y, ok := b.(TelemetryUnits)
-		return ok && x.Addressee == y.Addressee && sameStrings(x.Units, y.Units) && samePtr(x.MessageID, y.MessageID)
-	case TelemetryCoefficients:
-		y, ok := b.(TelemetryCoefficients)
-		return ok && x.Addressee == y.Addressee && sameFloats(x.Coefficients, y.Coefficients) && samePtr(x.MessageID, y.MessageID)
-	case TelemetryBits:
-		y, ok := b.(TelemetryBits)
-		return ok && x.Addressee == y.Addressee && x.Bits == y.Bits && x.Project == y.Project && samePtr(x.MessageID, y.MessageID)
-	case DirectedQuery:
-		y, ok := b.(DirectedQuery)
-		return ok && x.Addressee == y.Addressee && x.QueryType == y.QueryType && samePtr(x.Target, y.Target)
-	}
-	return false
 }

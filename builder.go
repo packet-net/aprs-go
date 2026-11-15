@@ -50,15 +50,20 @@ func (s Station) To(destination string) (Station, error) {
 }
 
 // Via gives this station with a digipeater path, such as Via("WIDE1-1", "WIDE2-1"), replacing
-// any set before. On an error it gives the station unchanged.
+// any set before. An entry ending in * is a used one, as in the neutral header form and a TNC2
+// line (Via("WIDE1-1*", "N0CALL-1*", "WIDE2-1")): the * is never part of the address. A path with
+// an entry not marked used before one that is cannot be written (a TNC2 line or an AX.25 frame
+// would read it back used) and is refused when the packet is written. On an error it gives the
+// station unchanged.
 func (s Station) Via(path ...string) (Station, error) {
 	entries := make([]PathEntry, 0, len(path))
 	for _, p := range path {
-		a, err := NewAddress(p)
+		text, used := strings.CutSuffix(p, "*")
+		a, err := NewAddress(text)
 		if err != nil {
 			return s, err
 		}
-		entries = append(entries, PathEntry{Address: a})
+		entries = append(entries, PathEntry{Address: a, Used: used})
 	}
 	s.path = entries
 	return s, nil
@@ -509,7 +514,7 @@ func (b MicEBuilder) data() (Data, error) {
 			rest := fields
 			rest.AltitudeFeet = nil
 			typeCode := '\''
-			if _, _, other := encodeMicE(&MicEReport{MicEMessage: b.micEMessage, TypeCode: &typeCode, Fields: rest}); other != nil && other.code.rank() < fault.code.rank() {
+			if _, _, other := encodeInformation(MicEReport{MicEMessage: b.micEMessage, TypeCode: &typeCode, Fields: rest}, true); other != nil && other.code.rank() < fault.code.rank() {
 				return nil, other
 			}
 			return nil, fault
@@ -735,8 +740,21 @@ func (b MessageBuilder) ReplyAck(theirID string) MessageBuilder {
 	return b
 }
 
-// Data gives the data, without a header.
-func (b MessageBuilder) Data() (Data, error) { return b.message, nil }
+// Data gives the data, without a header. A builder given an empty message ID refuses it
+// (invalid-message-id, ranked with whatever else the message has wrong), as it refuses any ID out
+// of range; neutral data given the same writes none, an empty ID being no ID there.
+func (b MessageBuilder) Data() (Data, error) {
+	if id := b.message.MessageID; id != nil && *id == "" {
+		fault := newEncodeError(RefusalInvalidMessageID, "a message ID is 1-5 letters or digits (APRS12c ch. 14)")
+		rest := b.message
+		rest.MessageID = Ptr("0")
+		if _, other := encode(rest); other != nil && other.code.rank() < fault.code.rank() {
+			return nil, other
+		}
+		return nil, fault
+	}
+	return b.message, nil
+}
 
 // Build gives the packet: the station's header and this message, encoded.
 func (b MessageBuilder) Build() (*Packet, error) { return build(b.station, b.Data) }
@@ -865,7 +883,7 @@ func refuseMissing(d Data, missing bool) (Data, error) {
 		return d, nil
 	}
 	if m, ok := d.(MicEReport); ok {
-		if _, _, err := encodeMicE(&m); err != nil {
+		if _, _, err := encodeInformation(m, true); err != nil {
 			return nil, err
 		}
 		return d, nil
@@ -884,15 +902,25 @@ func build(s Station, data func() (Data, error)) (*Packet, error) {
 	return s.packet(d)
 }
 
-// String gives the station's header, such as M0LTE-9>APZ001,WIDE1-1.
+// String gives the station's header, such as M0LTE-9>APZ001,WIDE1-1, with a * on the last used
+// path entry as a TNC2 line has it.
 func (s Station) String() string {
 	var sb strings.Builder
 	sb.WriteString(s.source.text)
 	sb.WriteByte('>')
 	sb.WriteString(s.destination.text)
-	for _, e := range s.path {
+	last := -1
+	for i, e := range s.path {
+		if e.Used {
+			last = i
+		}
+	}
+	for i, e := range s.path {
 		sb.WriteByte(',')
 		sb.WriteString(e.Address.text)
+		if i == last {
+			sb.WriteByte('*')
+		}
 	}
 	return sb.String()
 }

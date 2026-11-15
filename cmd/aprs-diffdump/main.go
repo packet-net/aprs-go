@@ -289,7 +289,14 @@ func api(p *aprs.Packet) map[string]any {
 		"third_party":  p.ThirdParty,
 		"has_errors":   p.HasErrors(),
 		"has_warnings": p.HasWarnings(),
-		"tnc2":         toHex(p.TNC2()),
+	}
+	// The line the library writes, read back as the frame is: a header it cannot carry (a path
+	// with an entry not marked used before one that is) is refused, as the frame's is.
+	if line, err := p.TNC2Line(); err != nil {
+		o["tnc2"] = "refused"
+		o["tnc2_refusal"] = err.(*aprs.EncodeError).Code().ID()
+	} else {
+		o["tnc2"] = toHex(line)
 	}
 	path := make([]any, len(p.Path))
 	for i, e := range p.Path {
@@ -423,18 +430,35 @@ func refusedRecord(n any, reason string, code aprs.RefusalCode, tool bool) map[s
 // vectors test runner uses too, and writes the dump record.
 func buildRecord(input map[string]any) map[string]any {
 	n := input["n"]
-	o := recipe.Build(input)
+	line := recipe.Write(input, false)
 	switch {
-	case o.Unsupported != "":
-		return map[string]any{"n": n, "result": "unsupported", "reason": o.Unsupported}
-	case o.Refusal != "":
-		r := map[string]any{"n": n, "result": "refused", "reason": o.Reason, "refusal": o.Refusal}
-		if o.Tool {
+	case line.Unsupported != "":
+		return map[string]any{"n": n, "result": "unsupported", "reason": line.Unsupported}
+	case line.Refusal != "":
+		r := map[string]any{"n": n, "result": "refused", "reason": line.Reason, "refusal": line.Refusal}
+		if line.Tool {
 			r["via"] = "tool"
 		}
+		addFrame(r, input)
 		return r
 	}
-	line := o.Packet.TNC2()
-	decoded, _ := result(line, aprs.Lenient)
-	return map[string]any{"n": n, "result": "built", "tnc2": toHex(line), "again": decoded}
+	decoded, _ := result(line.Bytes, aprs.Lenient)
+	r := map[string]any{"n": n, "result": "built", "tnc2": toHex(line.Bytes), "again": decoded}
+	addFrame(r, input)
+	return r
+}
+
+// addFrame adds the recipe written as an AX.25 frame: the frame as hex, or "refused" with the
+// reason code, as the vectors' build records have it. The library's own writer reads the frame's
+// header back, so a header it cannot carry is refused there.
+func addFrame(r map[string]any, input map[string]any) {
+	frame := recipe.Write(input, true)
+	switch {
+	case frame.Unsupported != "":
+	case frame.Refusal != "":
+		r["ax25"] = "refused"
+		r["ax25_refusal"] = frame.Refusal
+	default:
+		r["ax25"] = toHex(frame.Bytes)
+	}
 }

@@ -1283,15 +1283,15 @@ func readPositioned(o *keys) (aprs.Positioned, *Unreadable) {
 	if c, err := o.object("compression", []string{"fix", "source", "origin"}); err != nil {
 		return f, err
 	} else if c != nil {
-		fix, err := c.requiredChoice("fix", fixNames[:])
+		fix, err := c.requiredChoice("fix", fixNames)
 		if err != nil {
 			return f, err
 		}
-		source, err := c.requiredChoice("source", sourceNames[:])
+		source, err := c.requiredChoice("source", sourceNames)
 		if err != nil {
 			return f, err
 		}
-		origin, err := c.requiredChoice("origin", originNames[:])
+		origin, err := c.requiredChoice("origin", originNames)
 		if err != nil {
 			return f, err
 		}
@@ -1344,7 +1344,7 @@ func readPositioned(o *keys) (aprs.Positioned, *Unreadable) {
 		return f, err
 	} else if a != nil {
 		area := aprs.AreaObject{}
-		shape, err := a.requiredChoice("shape", shapeNames[:])
+		shape, err := a.requiredChoice("shape", shapeNames)
 		if err != nil {
 			return f, err
 		}
@@ -1352,7 +1352,7 @@ func readPositioned(o *keys) (aprs.Positioned, *Unreadable) {
 		if area.LatOffset, err = requiredInteger[uint8](a, "lat_offset"); err != nil {
 			return f, err
 		}
-		color, err := a.requiredChoice("color", colorNames[:])
+		color, err := a.requiredChoice("color", colorNames)
 		if err != nil {
 			return f, err
 		}
@@ -1386,7 +1386,7 @@ func readPositioned(o *keys) (aprs.Positioned, *Unreadable) {
 		return f, err
 	} else if s != nil {
 		storm := aprs.Storm{}
-		kind, err := s.requiredChoice("type", stormNames[:])
+		kind, err := s.requiredChoice("type", stormNames)
 		if err != nil {
 			return f, err
 		}
@@ -1415,7 +1415,7 @@ func readPositioned(o *keys) (aprs.Positioned, *Unreadable) {
 		if datum == nil {
 			return f, d.missing("datum")
 		}
-		precision, _, err := d.choice("precision", daoNames[:])
+		precision, _, err := d.choice("precision", daoNames)
 		if err != nil {
 			return f, err
 		}
@@ -1451,7 +1451,7 @@ func readPositioned(o *keys) (aprs.Positioned, *Unreadable) {
 		if frequency.MHz, err = v.requiredFloat("mhz"); err != nil {
 			return f, err
 		}
-		tone, ok, err := v.choice("tone", toneNames[:])
+		tone, ok, err := v.choice("tone", toneNames)
 		if err != nil {
 			return f, err
 		}

@@ -88,7 +88,7 @@ func isLocator(b []byte) bool {
 	return false
 }
 
-func encodeStatus(s *Status) ([]byte, *EncodeError) {
+func encodeStatus(s *Status) (forms, *EncodeError) {
 	out := []byte{'>'}
 	p := &pending{}
 	if s.Timestamp != nil {
@@ -133,24 +133,7 @@ func encodeStatus(s *Status) ([]byte, *EncodeError) {
 		out = append(out, '^', h, pw)
 	}
 	if err := p.finish(); err != nil {
-		return nil, err
+		return forms{}, err
 	}
-	// The text must read back as itself: status text that looks like a timestamp or a grid
-	// locator would not.
-	if back, ok := decodeStatus(newContext(Lenient), out).(Status); ok {
-		upper := func(s *string) *string {
-			if s == nil {
-				return nil
-			}
-			return Ptr(asciiUpper(*s))
-		}
-		if sameStatus(&back, s) || (samePtr(upper(back.Locator), upper(s.Locator)) && back.Text == s.Text && samePtr(back.Beam, s.Beam) && sameTimestamp(back.Timestamp, s.Timestamp)) {
-			return out, nil
-		}
-	}
-	return nil, newEncodeError(RefusalTextReadsAsField, "status text that would read back as a timestamp, grid locator or beam heading")
-}
-
-func sameStatus(a, b *Status) bool {
-	return sameTimestamp(a.Timestamp, b.Timestamp) && samePtr(a.Locator, b.Locator) && samePtr(a.Symbol, b.Symbol) && samePtr(a.Beam, b.Beam) && a.Text == b.Text
+	return onlyForm(out), nil
 }
