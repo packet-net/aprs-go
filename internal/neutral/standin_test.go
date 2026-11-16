@@ -60,3 +60,65 @@ func TestAnEarlierEncoderCodeBeatsAPendingOne(t *testing.T) {
 		t.Errorf("got %q (tool %v)", code, tool)
 	}
 }
+
+func micE(destination string, extra map[string]any) map[string]any {
+	d := map[string]any{"type": "mic-e", "mic_e_message": "returning", "latitude": 33.42733333333334, "longitude": -12.129, "symbol": "/j", "course_degrees": int64(251), "speed_knots": int64(20)}
+	for k, v := range extra {
+		d[k] = v
+	}
+	packet := map[string]any{"source": "N0CALL", "destination": destination, "data": d}
+	return map[string]any{"type": "third-party", "packet": packet}
+}
+
+// Undecoded data within four levels is not-encodable, first in the order, whatever header fault
+// an inner packet above it has (no destination, a source or a path nobody can hold).
+func TestUndecodedInnerDataBeatsAnInnerHeaderFault(t *testing.T) {
+	undecoded := map[string]any{"type": "unrecognized", "reason": "malformed"}
+	nest := func(inner map[string]any, headers ...map[string]any) map[string]any {
+		data := map[string]any{"type": "third-party", "packet": inner}
+		for _, h := range headers {
+			h["data"] = data
+			data = map[string]any{"type": "third-party", "packet": h}
+		}
+		return data
+	}
+	bottom := map[string]any{"source": "A", "destination": "B", "data": undecoded}
+	noDestination := map[string]any{"source": "AB"}
+	badSource := map[string]any{"source": "A>B", "destination": "B"}
+	for name, input := range map[string]map[string]any{
+		"no destination two levels above": nest(bottom, map[string]any{"source": "A", "destination": "B"}, noDestination),
+		"unusable source":                 nest(bottom, badSource),
+	} {
+		if code, _ := settled(t, input); code != "not-encodable" {
+			t.Errorf("%s: got %q", name, code)
+		}
+	}
+	// Five deep is invalid-third-party-header, and what lies below is never reached.
+	five := nest(bottom, map[string]any{"source": "A", "destination": "B"}, map[string]any{"source": "A", "destination": "B"}, map[string]any{"source": "A", "destination": "B"}, map[string]any{"source": "A", "destination": "B"})
+	if code, _ := settled(t, five); code != "invalid-third-party-header" {
+		t.Errorf("five deep: got %q", code)
+	}
+}
+
+// An inner Mic-E destination that does not match the data is the read-back's finding, so it comes
+// after every rule check: an inner header fault beside it wins, and with nothing else it is
+// not-encodable.
+func TestInnerMicEDestinationMismatchComesAfterTheRuleChecks(t *testing.T) {
+	if code, _ := settled(t, micE("S32U6T", nil)); code != "" {
+		t.Errorf("its own destination: got %q", code)
+	}
+	if code, _ := settled(t, micE("APRS", nil)); code != "not-encodable" {
+		t.Errorf("another destination: got %q", code)
+	}
+	withBadPath := micE("S32U6T", nil)
+	withBadPath["packet"].(map[string]any)["destination"] = "APRS"
+	withBadPath["packet"].(map[string]any)["path"] = []any{"TC+IP*"}
+	if code, _ := settled(t, withBadPath); code != "invalid-third-party-header" {
+		t.Errorf("a bad path beside a wrong destination: got %q", code)
+	}
+	// A data rule fault beside the wrong destination wins too.
+	bad := micE("APRS", map[string]any{"speed_knots": int64(999999)})
+	if code, _ := settled(t, bad); code != "value-out-of-range" {
+		t.Errorf("a data fault beside a wrong destination: got %q", code)
+	}
+}

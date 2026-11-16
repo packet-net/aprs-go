@@ -119,6 +119,8 @@ type Unreadable struct {
 	// Tool: this reader made the refusal, not the library's encoder (the dump record says
 	// "via": "tool"), for an input this package cannot hold whose value alone decides a code.
 	Tool bool
+	// Late: a finding of the read-back, which follows the rule checks (see collector).
+	Late bool
 }
 
 func (u *Unreadable) Error() string { return u.Reason }
@@ -141,7 +143,13 @@ func toolRefused(code aprs.RefusalCode, reason string) *Unreadable {
 // quality out of range). Each is replaced by a valid stand-in so that the rest of the data can be
 // encoded, and the result is settled afterwards (Settle): the first code in the Refusal reasons
 // order among the encoder's own refusal and these (vectors README, Encode records).
-type collector struct{ pending []*Unreadable }
+type collector struct {
+	pending []*Unreadable
+	// late is a finding of the read-back (an inner Mic-E report under a destination other than the
+	// one it computes), which comes after every rule check: any other pending refusal, and the
+	// encoder's own rule fault, wins over it.
+	late *Unreadable
+}
 
 func (c *collector) note(code aprs.RefusalCode, reason string) {
 	if c != nil {
@@ -149,13 +157,17 @@ func (c *collector) note(code aprs.RefusalCode, reason string) {
 	}
 }
 
-// first is the pending refusal that comes first in the order.
+// first is the pending refusal that comes first in the order, and a late finding only when
+// nothing else is pending.
 func (c *collector) first() *Unreadable {
 	var best *Unreadable
 	for _, u := range c.pending {
 		if best == nil || RefusalRank(u.Code.ID()) < RefusalRank(best.Code.ID()) {
 			best = u
 		}
+	}
+	if best == nil {
+		return c.late
 	}
 	return best
 }
@@ -190,6 +202,10 @@ func Settle(pending *Unreadable, encoder *aprs.RefusalCode, encoderReason string
 		return *encoder, encoderReason, false
 	}
 	if encoder != nil && RefusalRank(encoder.ID()) < RefusalRank(pending.Code.ID()) {
+		return *encoder, encoderReason, false
+	}
+	// A late finding (the read-back's) follows every rule check, the encoder's own included.
+	if encoder != nil && pending.Late && RefusalRank(encoder.ID()) < RefusalRank("text-reads-as-field") {
 		return *encoder, encoderReason, false
 	}
 	return pending.Code, pending.Reason, pending.Tool
@@ -1077,24 +1093,33 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 	if p == nil {
 		return nil, o.missing("packet")
 	}
+	// A header this package cannot hold is a refusal of the input's own, but undecoded data inside
+	// (not-encodable, first in the order) outranks it, so it is kept until the inner data is read,
+	// with a valid stand-in so that the rest is still read.
+	var headerFault *Unreadable
 	sourceText, err := p.text("source")
 	if err != nil {
 		return nil, err
 	}
 	source, serr := aprs.ThirdPartySource(sourceText)
 	if serr != nil {
-		return nil, toolRefused(aprs.RefusalInvalidThirdPartyHeader, "packet.source: not a third-party source")
+		headerFault = toolRefused(aprs.RefusalInvalidThirdPartyHeader, "packet.source: not a third-party source")
+		source, _ = aprs.ThirdPartySource("N0CALL")
 	}
 	destinationText, err := p.text("destination")
 	if err != nil {
 		return nil, err
 	}
-	if destinationText == "" {
-		return nil, toolRefused(aprs.RefusalInvalidThirdPartyHeader, "the third-party packet has no destination")
-	}
 	destination, derr := aprs.NewAddress(destinationText)
-	if derr != nil {
-		return nil, toolRefused(aprs.RefusalInvalidThirdPartyHeader, "packet.destination: not an address")
+	if destinationText == "" || derr != nil {
+		if headerFault == nil {
+			reason := "packet.destination: not an address"
+			if destinationText == "" {
+				reason = "the third-party packet has no destination"
+			}
+			headerFault = toolRefused(aprs.RefusalInvalidThirdPartyHeader, reason)
+		}
+		destination = aprs.MustAddress("APZ001")
 	}
 	pathTexts, err := p.strings("path")
 	if err != nil {
@@ -1154,6 +1179,9 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 	for i := 0; i < last; i++ {
 		usedOutOfOrder = usedOutOfOrder || !entries[i].Used
 	}
+	if headerFault != nil {
+		return nil, headerFault
+	}
 	if headerDefect || usedOutOfOrder {
 		return nil, toolRefused(aprs.RefusalInvalidThirdPartyHeader, "the third-party packet's header cannot be written back")
 	}
@@ -1176,7 +1204,14 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 			return nil, refused(e.Code(), "the inner packet's data: "+e.Error())
 		}
 		if made.Destination != destination {
-			return nil, toolRefused(aprs.RefusalNotEncodable, "the inner Mic-E data computes the destination "+made.Destination.String()+", not "+destination.String())
+			// The read-back's finding, after every rule check; the computed destination stands in
+			// so that the checks that follow still run, and is never what is written.
+			late := toolRefused(aprs.RefusalNotEncodable, "the inner Mic-E data computes the destination "+made.Destination.String()+", not "+destination.String())
+			late.Late = true
+			if o.c != nil && o.c.late == nil {
+				o.c.late = late
+			}
+			destination = made.Destination
 		}
 		information = made.Information
 	default:
