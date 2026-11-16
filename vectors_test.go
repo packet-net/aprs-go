@@ -21,6 +21,7 @@ package aprs_test
 import (
 	"bufio"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -96,7 +97,7 @@ func knownDifferences(t *testing.T) map[string]string {
 func TestVectors(t *testing.T) {
 	known := knownDifferences(t)
 	cases := loadCases(t)
-	ran := 0
+	ran, toleranceRan := 0, 0
 	for _, c := range cases {
 		id := c["id"].(string)
 		input := c["input"].(map[string]any)
@@ -125,14 +126,26 @@ func TestVectors(t *testing.T) {
 		if _, ok := c["strict"].(map[string]any); ok {
 			if _, ok := toleranceFor(c); ok {
 				run("tolerance", toleranceCheck)
+				toleranceRan++
 			}
 		}
 		if _, ok := c["reencode"]; ok {
 			run("reencode", reencodeCheck)
 		}
 		run("readback", readbackCheck)
+		if _, ok := c["pass_through"]; ok {
+			run("passthrough", passThroughCheck)
+		}
+		if _, ok := c["pass_through_inner"]; ok {
+			run("passthrough-inner", passThroughInnerCheck)
+		}
 	}
-	t.Logf("%d cases, %d checks", len(cases), ran)
+	t.Logf("%d cases, %d checks, tolerance check ran on %d cases", len(cases), ran, toleranceRan)
+	// The check runs on every case whose lenient diagnostics name exactly one tolerable code: none
+	// is skipped (README, "Checking a case").
+	if want := toleranceCases(cases); toleranceRan != want {
+		t.Errorf("the tolerance check ran on %d cases, expected %d", toleranceRan, want)
+	}
 }
 
 // ------------------------------------------------------------------ decoding
@@ -298,6 +311,28 @@ func containsString(list []string, s string) bool {
 	return false
 }
 
+// toleranceCases counts the decode cases whose lenient diagnostics name exactly one tolerable
+// code, each of which the tolerance check must run on.
+func toleranceCases(cases []vectorCase) int {
+	n := 0
+	for _, c := range cases {
+		input := c["input"].(map[string]any)
+		if _, ok := input["encode"]; ok {
+			continue
+		}
+		if _, ok := input["build"]; ok {
+			continue
+		}
+		if _, ok := c["strict"].(map[string]any); !ok {
+			continue
+		}
+		if _, ok := toleranceFor(c); ok {
+			n++
+		}
+	}
+	return n
+}
+
 // toleranceFor gives the one tolerance a case's lenient decoding used, if exactly one.
 func toleranceFor(c vectorCase) (aprs.Code, bool) {
 	seen := map[aprs.Code]bool{}
@@ -334,11 +369,38 @@ func strictCheck(c vectorCase) []string {
 func toleranceCheck(c vectorCase) []string {
 	code, _ := toleranceFor(c)
 	d := decodeInput(c["input"].(map[string]any), aprs.Lenient.Without(code))
+	var problems []string
+	if s, ok := c["strict"].(map[string]any); ok {
+		if other, ok := s["rejected_by"].(string); ok && other != code.ID() {
+			// Strict rejects by another code: turning the one tolerance off must give a reading
+			// that carries that code as a warning (README, "Checking a case").
+			problems = checkReadingWith(d, "warning:"+other)
+		} else {
+			problems = checkStrict(c, d)
+		}
+	} else {
+		problems = checkStrict(c, d)
+	}
 	var out []string
-	for _, p := range checkStrict(c, d) {
+	for _, p := range problems {
 		out = append(out, fmt.Sprintf("with only %s not tolerated: %s", code, p))
 	}
 	return out
+}
+
+// checkReadingWith expects a reading (not a rejection or unrecognized data) whose diagnostics
+// include want.
+func checkReadingWith(d decoded, want string) []string {
+	if d.packet == nil {
+		return []string{"expected a reading with " + want + ", got " + describe(d)}
+	}
+	if _, bad := d.packet.Data.(aprs.Unrecognized); bad {
+		return []string{"expected a reading with " + want + ", got " + describe(d)}
+	}
+	if !containsString(neutral.Diagnostics(d.packet.Diagnostics), want) {
+		return []string{"expected a reading with " + want + ", got " + describe(d)}
+	}
+	return nil
 }
 
 func show(b []byte) string {
@@ -479,28 +541,128 @@ func encodeCheck(c vectorCase) []string {
 }
 
 func buildCheck(c vectorCase) []string {
-	input := c["input"].(map[string]any)["build"].(map[string]any)
+	in := c["input"].(map[string]any)
+	input := in["build"].(map[string]any)
 	expect := c["expect"].(map[string]any)
 	wantRefused, _ := expect["refused"].(bool)
-	o := recipe.Build(input)
+	// "write": "ax25" writes the packet built as an AX.25 frame (KISS form, no flags, no FCS),
+	// compared as bytes with expect.ax25_hex; otherwise it is a TNC2 line.
+	frame := false
+	if w, ok := in["write"]; ok {
+		if w != "ax25" {
+			return []string{fmt.Sprintf("build: this runner does not know \"write\": %v", w)}
+		}
+		frame = true
+	}
+	o := recipe.Write(input, frame)
+	wantText := func() any {
+		if frame {
+			return expect["ax25_hex"]
+		}
+		return expect["tnc2"]
+	}
 	switch {
 	case o.Unsupported != "":
 		return []string{"build: this package's builders cannot say it: " + o.Unsupported}
 	case o.Refusal != "":
 		if !wantRefused {
-			return []string{fmt.Sprintf("build: expected %s, but the builder refused: %s (%s)", neutral.Show(expect["tnc2"]), o.Refusal, o.Reason)}
+			return []string{fmt.Sprintf("build: expected %s, but the builder refused: %s (%s)", neutral.Show(wantText()), o.Refusal, o.Reason)}
 		}
 		if want, ok := expect["refusal"].(string); ok && o.Refusal != want {
 			return []string{fmt.Sprintf("build: refused with %s (%s), expected %s", o.Refusal, o.Reason, want)}
 		}
 		return nil
 	case wantRefused:
-		return []string{"build: expected a refusal, built " + show(o.Packet.TNC2())}
+		return []string{"build: expected a refusal, built " + show(o.Bytes)}
 	}
-	if got := string(o.Packet.TNC2()); got != expect["tnc2"].(string) {
-		return []string{fmt.Sprintf("build: expected %s, built %s", neutral.Show(expect["tnc2"]), show(o.Packet.TNC2()))}
+	if frame {
+		if got := strings.ToUpper(hex.EncodeToString(o.Bytes)); got != strings.ToUpper(expect["ax25_hex"].(string)) {
+			return []string{fmt.Sprintf("build: expected frame %s, built %s", neutral.Show(expect["ax25_hex"]), got)}
+		}
+		return nil
+	}
+	if got := string(o.Bytes); got != expect["tnc2"].(string) {
+		return []string{fmt.Sprintf("build: expected %s, built %s", neutral.Show(expect["tnc2"]), show(o.Bytes))}
 	}
 	return nil
+}
+
+// passThroughCheck writes the lenient packet back as a program holds it, with its own TNC2 and
+// AX.25 writers (the information field as received, the header read back), and compares the line
+// and the frame, or the refusal, with the case's pass_through.
+func passThroughCheck(c vectorCase) []string {
+	d := decodeInput(c["input"].(map[string]any), aprs.Lenient)
+	if d.packet == nil {
+		return []string{"pass_through: the case does not decode"}
+	}
+	return passThrough(c["pass_through"].(map[string]any), d.packet, "pass_through")
+}
+
+// passThroughInnerCheck is passThroughCheck for a third-party packet's inner packet, taken out of
+// the outer one and written on its own: its header is read back by the outer rules.
+func passThroughInnerCheck(c vectorCase) []string {
+	d := decodeInput(c["input"].(map[string]any), aprs.Lenient)
+	if d.packet == nil {
+		return []string{"pass_through_inner: the case does not decode"}
+	}
+	outer, ok := d.packet.Data.(aprs.ThirdParty)
+	if !ok || outer.Packet == nil {
+		return []string{"pass_through_inner: the case is not a third-party packet"}
+	}
+	return passThrough(c["pass_through_inner"].(map[string]any), outer.Packet, "pass_through_inner")
+}
+
+func passThrough(want map[string]any, packet *aprs.Packet, name string) []string {
+	var out []string
+	// With a header, the held packet's information field is written under that header instead.
+	if h, ok := want["header"].(map[string]any); ok {
+		readdressed := *packet
+		if v, ok := h["source"].(string); ok {
+			readdressed.Source = mustAddress(v)
+		}
+		if v, ok := h["destination"].(string); ok {
+			readdressed.Destination = mustAddress(v)
+		}
+		if list, ok := h["path"].([]any); ok {
+			readdressed.Path = nil
+			for _, e := range list {
+				entry, _ := neutral.ReadPathEntry(e.(string))
+				readdressed.Path = append(readdressed.Path, entry)
+			}
+		}
+		packet = &readdressed
+	}
+	compare := func(form string, got []byte, err error, hexForm bool) {
+		refusal, wantsRefusal := want[form+"_refusal"].(string)
+		text, wantsBytes := want[map[bool]string{true: form + "_hex", false: form}[hexForm]].(string)
+		switch {
+		case err != nil && wantsRefusal:
+			var e *aprs.EncodeError
+			if !errors.As(err, &e) || e.Code().ID() != refusal {
+				out = append(out, fmt.Sprintf("%s %s: refused with %v, expected %s", name, form, err, refusal))
+			}
+		case err != nil:
+			if wantsBytes || wantsRefusal {
+				out = append(out, fmt.Sprintf("%s %s: refused (%v)", name, form, err))
+			}
+		case wantsRefusal:
+			out = append(out, fmt.Sprintf("%s %s: wrote bytes, expected %s", name, form, refusal))
+		case wantsBytes:
+			gotText := string(got)
+			if hexForm {
+				gotText = strings.ToUpper(hex.EncodeToString(got))
+				text = strings.ToUpper(text)
+			}
+			if gotText != text {
+				out = append(out, fmt.Sprintf("%s %s: expected %q, wrote %q", name, form, text, gotText))
+			}
+		}
+	}
+	line, err := packet.TNC2Line()
+	compare("tnc2", line, err, false)
+	frame, err := packet.AX25()
+	compare("ax25", frame, err, true)
+	return out
 }
 
 func readbackCheck(c vectorCase) []string {
@@ -533,4 +695,12 @@ func readbackCheck(c vectorCase) []string {
 	var out []string
 	neutral.Differences(any(written), any(neutral.Data(data)), "readback", &out)
 	return out
+}
+
+func mustAddress(text string) aprs.Address {
+	a, err := aprs.NewAddress(text)
+	if err != nil {
+		panic(err)
+	}
+	return a
 }

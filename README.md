@@ -6,7 +6,7 @@ Conforms to [aprs-vectors](https://github.com/packet-net/aprs-vectors) 1.2: ever
 
 - **Decoding never fails because of the information field.** Every deviation from the spec becomes a `Diagnostic` with a stable `Code`, and the rest of the packet is still read where it can be.
 - **Strict or lenient, one defect at a time.** `ParseOptions` says which of the 33 tolerable defects to accept. `aprs.Lenient` (the zero value) accepts them all, each with a warning; `aprs.Strict` accepts none; any single one can be switched off.
-- **The encoder writes only what the spec allows.** It checks what it wrote by decoding it again: a comment that would read back as something else, such as an altitude or a `!DAO!`, is escaped or refused, never silently changed.
+- **The encoder reads back what it writes.** Every call that writes bytes from data ends in one read-back: it decodes what it wrote, leniently, and checks it is the data given (no warning or error, every field the same, a number held in steps compared with the value given rounded once to the step written), so a comment that would read back as something else, such as an altitude or a `!DAO!`, is written in another equivalent form or refused, never silently changed. It never returns bytes that failed, and a header it writes (`TNC2`, `AX25`, `KISS`) is read back the same way.
 
 ## Install
 
@@ -49,7 +49,7 @@ case aprs.Unrecognized:
 
 An optional value is a pointer, nil when absent; `aprs.Ptr(88.0)` makes one. Values are in the units APRS sends (knots, feet, mph, degrees Fahrenheit), with the unit in the field name.
 
-`DecodeAX25` takes an AX.25 frame without flags or FCS, and `DecodeKISS` a frame as a KISS TNC sends it. `packet.TNC2()`, `packet.AX25()` and `packet.KISS(port)` write a packet back out.
+`DecodeAX25` takes an AX.25 frame without flags or FCS, and `DecodeKISS` a frame as a KISS TNC sends it. `packet.TNC2Line()` (or `TNC2()`, which gives nil where a line cannot be written), `packet.AX25()` and `packet.KISS(port)` write a packet back out. `fmt.Println(packet)` shows it as held, for display: it never refuses and is not read back, so it is not what to send.
 
 ## Strict and lenient
 
@@ -103,9 +103,9 @@ info, err := aprs.Encode(aprs.Message{Addressee: "G3NRW", Text: "Hi Ian", Messag
 // :G3NRW    :Hi Ian{01}
 ```
 
-An information field is at most 256 bytes (APRS12c ch. 3): an encoder or builder refuses data that would make a longer one as `information-field-too-long` (a field over its own limit, such as message text over 67 characters, stays `too-long`), judged last on the bytes actually written, so data any other rule refuses gets that rule's code; text counts as its UTF-8 bytes, and a third-party packet's limit is on the outer field. `Packet.TNC2`, `AX25` and `KISS` write out a packet the program already holds (a decoded one, say): they are not encoders, and write its information field as it stands, with no size check. Text with a control character in it (a byte below 0x20, TAB, CR and LF inside the text included, or 0x7F) is refused as `invalid-character`. A decoder sets no limit on the field, and gives one `control-character-in-text` warning for text that holds a control character, so `aprs.Strict` rejects it.
+An information field is at most 256 bytes (APRS12c ch. 3): an encoder or builder refuses data that would make a longer one as `information-field-too-long` (a field over its own limit, such as message text over 67 characters, stays `too-long`), judged last on the bytes actually written, so data any other rule refuses gets that rule's code; text counts as its UTF-8 bytes, and a third-party packet's limit is on the outer field. `Packet.TNC2Line`, `TNC2`, `AX25` and `KISS` write out a packet the program already holds (a decoded one, say): they are not encoders, and write its information field as it stands (a hand-changed `Packet` as it stands), with no size check; the header they write is read back, and a line refuses a CR or LF inside the information field as `tnc2-cannot-carry` (one at its very end is carried), since the line would end there. A path with an entry not marked used before one that is reads back used in a line and in a frame alike: it is `invalid-path`, refused when the header is given (`NewPacket`, a builder's `Build`), before any fault of the data. Text with a control character in it (a byte below 0x20, TAB, CR and LF inside the text included, or 0x7F) is refused as `invalid-character`. A decoder sets no limit on the field, and gives one `control-character-in-text` warning for text that holds a control character, so `aprs.Strict` rejects it.
 
-What the spec does not allow is refused with an `*EncodeError`. Its `Code()` says why, from the same 26 reasons the other implementations use (the `refusals` list in the vectors' `codes.json`); the message is for people and may change.
+What the spec does not allow is refused with an `*EncodeError`. Its `Code()` says why, from the same 28 reasons the other implementations use (the `refusals` list in the vectors' `codes.json`); the message is for people and may change.
 
 ```go
 _, err := aprs.Encode(aprs.Message{Addressee: "N0CALL", Text: strings.Repeat("x", 68)})
@@ -119,7 +119,7 @@ New codes may be added in later 1.x releases, so give a switch over them a defau
 
 ## Mic-E and device identification
 
-Mic-E carries half its position in the destination address, so `NewPacket` works that address out (the destination you pass is not used), and `Encode` refuses a Mic-E report rather than drop half of it. `packet.Device()` names the sending device or program from the [APRS device identification database](https://github.com/aprsorg/aprs-deviceid).
+Mic-E carries half its position in the destination address, so `NewPacket` works that address out (pass the zero `Address` or `DefaultDestination`; any other destination that is not the one worked out is refused), and `Encode` refuses a Mic-E report rather than drop half of it. `packet.Device()` names the sending device or program from the [APRS device identification database](https://github.com/aprsorg/aprs-deviceid).
 
 ```go
 packet, _ := aprs.DecodeTNC2([]byte("N1JCM-9>TRQP7T,WA1PLE-4*:`c'wl|+>/`\"4-}_%"), aprs.Lenient)

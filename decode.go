@@ -125,10 +125,18 @@ func decodePositionReport(ctx *context, info []byte, offset int) Data {
 // badTimestamp handles a / or @ report whose timestamp is missing or garbled, a tolerated defect
 // (UAP 5.8). A position straight after the DTI (the timestamp is missing) is tried first: a
 // timestamp starts with six digits, so it cannot be mistaken for one. Then seven garbled bytes are
-// skipped. Where the position is is judged on the position itself, under the options in force,
-// not on anything after it (vectors README, "Timestamps that are not there").
+// skipped. When the seventh byte is z, / or h and an uncompressed position follows the seven,
+// that reading goes first. Where the position is is judged on the position itself, under the
+// options in force, not on anything after it (vectors README, "Timestamps that are not there").
 func badTimestamp(ctx *context, info []byte, offset int, messaging bool) Data {
-	for _, at := range []int{1, 8} {
+	order := []int{1, 8}
+	if len(info) > 8 && (info[7] == 'z' || info[7] == '/' || info[7] == 'h') && info[8] >= '0' && info[8] <= '9' {
+		// A time indicator in seventh place and an uncompressed position after it: the
+		// timestamp is garbled, whatever the bytes straight after the DTI read as (a compressed
+		// position there is weak evidence).
+		order = []int{8, 1}
+	}
+	for _, at := range order {
 		probe := newContext(ctx.options)
 		if _, ok := decodePosition(probe, from(info, at), offset+at); !ok {
 			continue

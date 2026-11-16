@@ -366,7 +366,11 @@ func coordinate(value float64, degreeDigits int, ambiguity uint8, dao *bool) ([]
 	// units is now hundredths of a minute.
 	degrees := units / 6000
 	hundredths := units % 6000
-	text := []byte(fmt.Sprintf("%0*d%02d.%02d", degreeDigits, degrees, hundredths/100, hundredths%100))
+	text := make([]byte, 0, degreeDigits+6)
+	text = pushDigits(text, degrees, degreeDigits)
+	text = pushDigits(text, hundredths/100, 2)
+	text = append(text, '.')
+	text = pushDigits(text, hundredths%100, 2)
 	// Blank the trailing digits: hundredths, tenths, units of minutes, tens of minutes.
 	n := len(text)
 	blanks := []int{n - 1, n - 2, n - 4, n - 5}

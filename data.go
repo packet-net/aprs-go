@@ -487,9 +487,13 @@ type MicEReport struct {
 	DestinationSSID uint8
 	// AltitudeInComment: the altitude is written in the status text as /A= (feet) rather than in
 	// the Mic-E altitude bytes (whole metres). Set by the decoder when the altitude came from a
-	// /A=, and honoured by the encoder, so that encoding a copy of a report writes the bytes the
-	// report was built from. An altitude the Mic-E bytes cannot hold exactly is written as /A=
-	// whatever this says.
+	// /A=, and honoured by the encoder, so that encoding a copy of a report writes the form it was
+	// read in. With it set the altitude must fit a /A= (six digits, or - and five), and one that
+	// does not is refused (it is not moved to the bytes). With it clear the altitude goes in the
+	// bytes, rounded to the nearest metre, and in a /A= only as the encoder's next form where the
+	// comment makes the bytes read back wrong and a /A= holds the value exactly; neutral data
+	// whose value only a /A= holds exactly (a whole number of feet the bytes cannot hold) goes in
+	// the /A= first.
 	AltitudeInComment bool
 	Fields            Positioned
 }

@@ -119,6 +119,8 @@ type Unreadable struct {
 	// Tool: this reader made the refusal, not the library's encoder (the dump record says
 	// "via": "tool"), for an input this package cannot hold whose value alone decides a code.
 	Tool bool
+	// Late: a finding of the read-back, which follows the rule checks (see collector).
+	Late bool
 }
 
 func (u *Unreadable) Error() string { return u.Reason }
@@ -141,7 +143,13 @@ func toolRefused(code aprs.RefusalCode, reason string) *Unreadable {
 // quality out of range). Each is replaced by a valid stand-in so that the rest of the data can be
 // encoded, and the result is settled afterwards (Settle): the first code in the Refusal reasons
 // order among the encoder's own refusal and these (vectors README, Encode records).
-type collector struct{ pending []*Unreadable }
+type collector struct {
+	pending []*Unreadable
+	// late is a finding of the read-back (an inner Mic-E report under a destination other than the
+	// one it computes), which comes after every rule check: any other pending refusal, and the
+	// encoder's own rule fault, wins over it.
+	late *Unreadable
+}
 
 func (c *collector) note(code aprs.RefusalCode, reason string) {
 	if c != nil {
@@ -149,7 +157,8 @@ func (c *collector) note(code aprs.RefusalCode, reason string) {
 	}
 }
 
-// first is the pending refusal that comes first in the order.
+// first is the pending refusal that comes first in the order, and a late finding only when
+// nothing else is pending.
 func (c *collector) first() *Unreadable {
 	var best *Unreadable
 	for _, u := range c.pending {
@@ -157,16 +166,19 @@ func (c *collector) first() *Unreadable {
 			best = u
 		}
 	}
+	if best == nil {
+		return c.late
+	}
 	return best
 }
 
 // refusalOrder is the README's Refusal reasons order.
 var refusalOrder = []string{
-	"not-encodable", "invalid-address", "ax25-cannot-carry", "tnc2-cannot-carry", "invalid-third-party-header",
+	"not-encodable", "invalid-address", "invalid-path", "invalid-third-party-header",
 	"invalid-addressee", "invalid-name", "invalid-timestamp", "not-a-number", "value-out-of-range", "value-has-no-form",
 	"invalid-code", "invalid-symbol", "invalid-character", "too-long", "padding-space", "malformed", "invalid-message-id",
 	"invalid-nmea", "extension-conflict", "field-not-allowed", "symbol-mismatch", "missing-field", "value-given-twice",
-	"text-reads-as-field", "does-not-read-back", "information-field-too-long",
+	"text-reads-as-field", "does-not-read-back", "information-field-too-long", "ax25-cannot-carry", "tnc2-cannot-carry",
 }
 
 // RefusalRank is a code's place in the Refusal reasons order.
@@ -190,6 +202,10 @@ func Settle(pending *Unreadable, encoder *aprs.RefusalCode, encoderReason string
 		return *encoder, encoderReason, false
 	}
 	if encoder != nil && RefusalRank(encoder.ID()) < RefusalRank(pending.Code.ID()) {
+		return *encoder, encoderReason, false
+	}
+	// A late finding (the read-back's) follows every rule check, the encoder's own included.
+	if encoder != nil && pending.Late && RefusalRank(encoder.ID()) < RefusalRank("text-reads-as-field") {
 		return *encoder, encoderReason, false
 	}
 	return pending.Code, pending.Reason, pending.Tool
@@ -356,6 +372,20 @@ func integerOf[T integer](k *keys, key string) (*T, *Unreadable) {
 			return &t, nil
 		}
 	}
+	// A number that is not whole is outside what a whole-unit or code field holds: it is never
+	// rounded (vectors README, Read-back). This package's integers cannot hold it, so the
+	// refusal is made here, with 0 as the stand-in so the rest of the data is still checked.
+	if x, ok := asFloat(v); ok {
+		if math.IsNaN(x) || math.IsInf(x, 0) {
+			k.c.note(aprs.RefusalNotANumber, k.name(key)+": not a number")
+			var zero T
+			return &zero, nil
+		}
+		// Whole, but outside what this package's integer holds: outside the field, so the rule's code.
+		k.c.note(aprs.RefusalValueOutOfRange, k.name(key)+": not a whole number, or outside its field")
+		var zero T
+		return &zero, nil
+	}
 	return nil, unsupported("%s: not a whole number in the range this package holds", k.name(key))
 }
 
@@ -385,7 +415,12 @@ func stepped[T integer](k *keys, key string) (*T, *Unreadable) {
 		return nil, toolRefused(aprs.RefusalValueOutOfRange, k.name(key)+": outside its field")
 	}
 	x, ok := asFloat(v)
-	if !ok || math.IsNaN(x) || math.IsInf(x, 0) {
+	if ok && (math.IsNaN(x) || math.IsInf(x, 0)) {
+		k.c.note(aprs.RefusalNotANumber, k.name(key)+": not a number")
+		var zero T
+		return &zero, nil
+	}
+	if !ok {
 		return nil, unsupported("%s: not a number", k.name(key))
 	}
 	r := roundSteps(x)
@@ -708,8 +743,16 @@ func readKind(o *keys, kind string) (aprs.Data, *Unreadable) {
 		} else if ok {
 			for _, x := range a {
 				n, ok := whole(x)
-				if !ok || n < 0 || n > 255 {
-					return nil, unsupported("legacy_telemetry: values are bytes, 0-255")
+				if y, isNum := asFloat(x); !ok && isNum && (math.IsNaN(y) || math.IsInf(y, 0)) {
+					o.c.note(aprs.RefusalNotANumber, "legacy_telemetry: not a number")
+					n, ok = 0, true
+				} else if !ok && isNum || ok && (n < 0 || n > 255) {
+					// Bytes: a fraction or a number past 0-255 is outside what a value holds.
+					o.c.note(aprs.RefusalValueOutOfRange, "legacy_telemetry: values are bytes, 0-255")
+					n, ok = 0, true
+				}
+				if !ok {
+					return nil, unsupported("legacy_telemetry: values are numbers")
 				}
 				r.LegacyTelemetry = append(r.LegacyTelemetry, byte(n))
 			}
@@ -1050,24 +1093,33 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 	if p == nil {
 		return nil, o.missing("packet")
 	}
+	// A header this package cannot hold is a refusal of the input's own, but undecoded data inside
+	// (not-encodable, first in the order) outranks it, so it is kept until the inner data is read,
+	// with a valid stand-in so that the rest is still read.
+	var headerFault *Unreadable
 	sourceText, err := p.text("source")
 	if err != nil {
 		return nil, err
 	}
 	source, serr := aprs.ThirdPartySource(sourceText)
 	if serr != nil {
-		return nil, unsupported("packet.source: not a third-party source")
+		headerFault = toolRefused(aprs.RefusalInvalidThirdPartyHeader, "packet.source: not a third-party source")
+		source, _ = aprs.ThirdPartySource("N0CALL")
 	}
 	destinationText, err := p.text("destination")
 	if err != nil {
 		return nil, err
 	}
-	if destinationText == "" {
-		return nil, toolRefused(aprs.RefusalInvalidThirdPartyHeader, "the third-party packet has no destination")
-	}
 	destination, derr := aprs.NewAddress(destinationText)
-	if derr != nil {
-		return nil, unsupported("packet.destination: not an address")
+	if destinationText == "" || derr != nil {
+		if headerFault == nil {
+			reason := "packet.destination: not an address"
+			if destinationText == "" {
+				reason = "the third-party packet has no destination"
+			}
+			headerFault = toolRefused(aprs.RefusalInvalidThirdPartyHeader, reason)
+		}
+		destination = aprs.MustAddress("APZ001")
 	}
 	pathTexts, err := p.strings("path")
 	if err != nil {
@@ -1127,6 +1179,9 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 	for i := 0; i < last; i++ {
 		usedOutOfOrder = usedOutOfOrder || !entries[i].Used
 	}
+	if headerFault != nil {
+		return nil, headerFault
+	}
 	if headerDefect || usedOutOfOrder {
 		return nil, toolRefused(aprs.RefusalInvalidThirdPartyHeader, "the third-party packet's header cannot be written back")
 	}
@@ -1139,6 +1194,26 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 		if d != aprs.UnrecognizedEmpty {
 			return nil, toolRefused(aprs.RefusalNotEncodable, "packet.data: undecoded, and its bytes are not in the neutral form")
 		}
+	case aprs.MicEReport:
+		// Mic-E data carries half its position in the destination: the inner packet is written
+		// under the destination it computes, and one given that differs is not substituted: the
+		// field would read as other data under the header, not-encodable.
+		made, perr := aprs.NewPacket(aprs.MustAddress("N0CALL"), aprs.Address{}, nil, d)
+		if perr != nil {
+			e := perr.(*aprs.EncodeError)
+			return nil, refused(e.Code(), "the inner packet's data: "+e.Error())
+		}
+		if made.Destination != destination {
+			// The read-back's finding, after every rule check; the computed destination stands in
+			// so that the checks that follow still run, and is never what is written.
+			late := toolRefused(aprs.RefusalNotEncodable, "the inner Mic-E data computes the destination "+made.Destination.String()+", not "+destination.String())
+			late.Late = true
+			if o.c != nil && o.c.late == nil {
+				o.c.late = late
+			}
+			destination = made.Destination
+		}
+		information = made.Information
 	default:
 		info, eerr := aprs.Encode(data)
 		if eerr != nil {
@@ -1147,10 +1222,9 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 		}
 		information = info
 	}
-	inner := aprs.Decode(source, destination, entries, information, aprs.Lenient)
-	inner.Data = data
-	inner.Diagnostics = diagnostics
-	inner.ThirdParty = true
+	// Built from data, not decoded: its data is held as given, so the writers compare it with the
+	// rounding the form written allows.
+	inner := &aprs.Packet{Source: source, Destination: destination, Path: entries, Information: information, Data: data, Diagnostics: diagnostics, ThirdParty: true}
 	return aprs.ThirdParty{Packet: inner}, nil
 }
 
@@ -1283,15 +1357,15 @@ func readPositioned(o *keys) (aprs.Positioned, *Unreadable) {
 	if c, err := o.object("compression", []string{"fix", "source", "origin"}); err != nil {
 		return f, err
 	} else if c != nil {
-		fix, err := c.requiredChoice("fix", fixNames[:])
+		fix, err := c.requiredChoice("fix", fixNames)
 		if err != nil {
 			return f, err
 		}
-		source, err := c.requiredChoice("source", sourceNames[:])
+		source, err := c.requiredChoice("source", sourceNames)
 		if err != nil {
 			return f, err
 		}
-		origin, err := c.requiredChoice("origin", originNames[:])
+		origin, err := c.requiredChoice("origin", originNames)
 		if err != nil {
 			return f, err
 		}
@@ -1344,7 +1418,7 @@ func readPositioned(o *keys) (aprs.Positioned, *Unreadable) {
 		return f, err
 	} else if a != nil {
 		area := aprs.AreaObject{}
-		shape, err := a.requiredChoice("shape", shapeNames[:])
+		shape, err := a.requiredChoice("shape", shapeNames)
 		if err != nil {
 			return f, err
 		}
@@ -1352,7 +1426,7 @@ func readPositioned(o *keys) (aprs.Positioned, *Unreadable) {
 		if area.LatOffset, err = requiredInteger[uint8](a, "lat_offset"); err != nil {
 			return f, err
 		}
-		color, err := a.requiredChoice("color", colorNames[:])
+		color, err := a.requiredChoice("color", colorNames)
 		if err != nil {
 			return f, err
 		}
@@ -1386,7 +1460,7 @@ func readPositioned(o *keys) (aprs.Positioned, *Unreadable) {
 		return f, err
 	} else if s != nil {
 		storm := aprs.Storm{}
-		kind, err := s.requiredChoice("type", stormNames[:])
+		kind, err := s.requiredChoice("type", stormNames)
 		if err != nil {
 			return f, err
 		}
@@ -1415,7 +1489,7 @@ func readPositioned(o *keys) (aprs.Positioned, *Unreadable) {
 		if datum == nil {
 			return f, d.missing("datum")
 		}
-		precision, _, err := d.choice("precision", daoNames[:])
+		precision, _, err := d.choice("precision", daoNames)
 		if err != nil {
 			return f, err
 		}
@@ -1434,8 +1508,26 @@ func readPositioned(o *keys) (aprs.Positioned, *Unreadable) {
 		}
 		for _, x := range a {
 			n, ok := whole(x)
-			if !ok || n < 0 || n > 65535 {
-				return f, unsupported("telemetry.analog: each is a whole number, 0-65535")
+			if !ok {
+				if y, isNum := asFloat(x); isNum && (math.IsNaN(y) || math.IsInf(y, 0)) {
+					o.c.note(aprs.RefusalNotANumber, "telemetry.analog: not a number")
+					n, ok = 0, true
+				} else if isNum {
+					o.c.note(aprs.RefusalValueOutOfRange, "telemetry.analog: not a whole number")
+					n, ok = 0, true
+				}
+			}
+			if ok && (n < 0 || n > 65535) {
+				o.c.note(aprs.RefusalValueOutOfRange, "telemetry.analog: outside 0-65535")
+				n = 0
+			}
+			if !ok {
+				if _, isNum := asFloat(x); isNum {
+					o.c.note(aprs.RefusalValueOutOfRange, "telemetry.analog: outside 0-65535")
+					n, ok = 0, true
+				} else {
+					return f, unsupported("telemetry.analog: each is a number")
+				}
 			}
 			telemetry.Analog = append(telemetry.Analog, uint16(n))
 		}
@@ -1451,7 +1543,7 @@ func readPositioned(o *keys) (aprs.Positioned, *Unreadable) {
 		if frequency.MHz, err = v.requiredFloat("mhz"); err != nil {
 			return f, err
 		}
-		tone, ok, err := v.choice("tone", toneNames[:])
+		tone, ok, err := v.choice("tone", toneNames)
 		if err != nil {
 			return f, err
 		}
@@ -1596,11 +1688,9 @@ func agreloQuality(o *keys) (uint8, *Unreadable) {
 		return 0, nil
 	}
 	if x != math.Trunc(x) {
-		if x < 0 || x > 9 {
-			o.c.note(aprs.RefusalValueOutOfRange, "quality: outside 0-9")
-			return 0, nil
-		}
-		return 0, unsupported("%s: not a whole number", o.name("quality"))
+		// Not rounded: a non-integer quality is outside what the field holds.
+		o.c.note(aprs.RefusalValueOutOfRange, "quality: not a whole number")
+		return 0, nil
 	}
 	if x < 0 || x > 9 {
 		o.c.note(aprs.RefusalValueOutOfRange, "quality: outside 0-9")

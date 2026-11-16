@@ -112,3 +112,137 @@ func TestRunOnWeatherValueBeforeALiftedElementEndsTheWeatherText(t *testing.T) {
 		}
 	}
 }
+
+// Round 5: a garbled timestamp before an uncompressed position. When the seventh byte after the
+// DTI is z, / or h and an uncompressed position follows the seven bytes, the position is read
+// there, whatever the bytes straight after the DTI read as.
+func decodeInfo(info string, o aprs.ParseOptions) *aprs.Packet {
+	return aprs.Decode(aprs.MustAddress("N0CALL"), aprs.MustAddress("APZ001"), nil, []byte(info), o)
+}
+
+func hasCode(p *aprs.Packet, code aprs.Code) bool {
+	for _, d := range p.Diagnostics {
+		if d.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
+func TestGarbledTimestampBeforeAnUncompressedPositionReadsAfterTheSevenBytes(t *testing.T) {
+	for _, dti := range []string{"@", "/"} {
+		for _, ind := range []string{"z", "/", "h"} {
+			// R30549z2831.0 would read as a compressed position straight after the DTI.
+			info := dti + "R30549" + ind + "2831.07N/08142.92W_015/001g006t058"
+			p := decodeInfo(info, aprs.Lenient)
+			r, ok := p.Data.(aprs.PositionReport)
+			if !ok {
+				t.Fatalf("%q: %T", info, p.Data)
+			}
+			if r.Fields.Compressed || r.Timestamp != nil || r.Messaging != (dti == "@") {
+				t.Errorf("%q: compressed %v, timestamp %v, messaging %v", info, r.Fields.Compressed, r.Timestamp, r.Messaging)
+			}
+			if got := r.Fields.Position.Latitude; got < 28.51 || got > 28.52 {
+				t.Errorf("%q: latitude %v", info, got)
+			}
+			if !hasCode(p, aprs.CodeMalformedTimestamp) || p.HasErrors() {
+				t.Errorf("%q: %v", info, p.Diagnostics)
+			}
+			// Strict rejects it by the malformed timestamp.
+			s := decodeInfo(info, aprs.Strict)
+			if !s.HasErrors() || !hasCode(s, aprs.CodeMalformedTimestamp) {
+				t.Errorf("%q strict: %v", info, s.Diagnostics)
+			}
+			if _, ok := s.Data.(aprs.PositionReport); ok {
+				t.Errorf("%q strict: decoded", info)
+			}
+		}
+	}
+}
+
+func TestGarbledTimestampRuleLeavesOtherShapesAlone(t *testing.T) {
+	// A seventh byte that is not a time indicator: the compressed reading straight after the DTI stands.
+	p := decodeInfo("@R30549x2831.07N/08142.92W_", aprs.Lenient)
+	if r, ok := p.Data.(aprs.PositionReport); !ok || !r.Fields.Compressed {
+		t.Errorf("seventh byte x: %v", p.Data)
+	}
+	// A compressed position after the seven bytes does not win.
+	p = decodeInfo("@R30549z/5L!!<*e7>7P[", aprs.Lenient)
+	if r, ok := p.Data.(aprs.PositionReport); !ok || !r.Fields.Compressed || r.Timestamp != nil {
+		t.Errorf("compressed after seven: %v", p.Data)
+	}
+	// A short field cannot take the new branch.
+	for _, info := range []string{"@R30549z", "@R30549z2", "/R30549h"} {
+		decodeInfo(info, aprs.Lenient)
+	}
+}
+
+func TestGarbledTimestampPositionIsJudgedOnThePositionAlone(t *testing.T) {
+	// Lower-case hemisphere letters decode leniently, so the position after the seven bytes is read.
+	p := decodeInfo("@R30549z2831.07n/08142.92w_015/001", aprs.Lenient)
+	r, ok := p.Data.(aprs.PositionReport)
+	if !ok || r.Fields.Compressed || r.Fields.Position.Latitude < 28 || r.Fields.Position.Latitude > 29 {
+		t.Errorf("lower-case lenient: %v", p.Data)
+	}
+	if p := decodeInfo("@R30549z2831.07n/08142.92w_015/001", aprs.Strict); !p.HasErrors() {
+		t.Errorf("lower-case strict: %v", p.Diagnostics)
+	}
+	// Position ambiguity in the following position.
+	p = decodeInfo("/R30549h28  .  N/081  .  W_", aprs.Lenient)
+	r, ok = p.Data.(aprs.PositionReport)
+	if !ok || r.Fields.Compressed || r.Fields.Position.Ambiguity != 4 {
+		t.Errorf("ambiguity lenient: %v %v", p.Data, p.Diagnostics)
+	}
+	if p := decodeInfo("/R30549h28  .  N/081  .  W_", aprs.Strict); !hasCode(p, aprs.CodeMalformedTimestamp) {
+		t.Errorf("ambiguity strict: %v", p.Diagnostics)
+	}
+	// A position after the seven bytes that does not decode (longitude hemisphere X): as before.
+	p = decodeInfo("@R30549z2831.07N/08142.92X_", aprs.Lenient)
+	if r, ok := p.Data.(aprs.PositionReport); ok && !r.Fields.Compressed {
+		t.Errorf("not a position: %v", p.Data)
+	}
+}
+
+// Round 5: a Mic-E locator's space is judged on the decoder's own result, the text left once the
+// altitude, base-91 telemetry and !DAO! are lifted as for the data, and that space separates the
+// locator from the comment (vectors README, Mic-E).
+func TestMicELocatorSpaceIsJudgedOnWhatTheDecoderLifts(t *testing.T) {
+	const head = "`(_fn\"Oj/`IO91/G"
+	tests := []struct {
+		name, tail, comment string
+		missingSpace        bool
+	}{
+		// A !DAO! that exists only by joining across a lifted altitude is text, so the space is missing.
+		{"dao joined across an altitude", "!W1\"4e}2! hi", "!W12! hi", true},
+		{"lower-case dao joined across an altitude", "!w1\"4e}2!x", "!w12!x", true},
+		{"dao joined, no comment after", "!W3\"4e}4!", "!W34!", true},
+		// Two spaces after the locator: one separates, one is the comment's delimiter.
+		{"two spaces then a later altitude", "\"4e}  y", "y", false},
+		{"three spaces then a later altitude", "\"4e}   y", " y", false},
+		{"two spaces, then an altitude, then text", "  \"4e}z", "z", false},
+		// Telemetry an altitude splits is text, so nothing after it has its space.
+		{"two spaces after telemetry split by an altitude", "|!:&0hl!Y[/>\"4e}='p|  y", "|!:&0hl!Y[/>='p|  y", true},
+		{"one space after telemetry split by an altitude", "|!:&0hl!Y[/>\"4e}='p| z", "|!:&0hl!Y[/>='p| z", true},
+		// Two spaces after whole telemetry that follows a later altitude.
+		{"two spaces after telemetry after an altitude", "\"4e}|!:&0'p|  y", "y", false},
+		// Two spaces after the locator and telemetry.
+		{"two spaces after telemetry", "|!:&0'p|  y", "y", false},
+		{"three spaces after telemetry", "|!:&0'p|   y", " y", false},
+		{"two spaces after a dao", "!W12!  y", "y", false},
+	}
+	for _, tc := range tests {
+		info := head + tc.tail
+		p := aprs.Decode(aprs.MustAddress("N0CALL"), aprs.MustAddress("S32UVT"), nil, []byte(info), aprs.Lenient)
+		m, ok := p.Data.(aprs.MicEReport)
+		if !ok {
+			t.Errorf("%s: %q is not Mic-E: %v", tc.name, info, p.Data)
+			continue
+		}
+		if m.Fields.Comment != tc.comment {
+			t.Errorf("%s: comment %q, want %q", tc.name, m.Fields.Comment, tc.comment)
+		}
+		if got := hasCode(p, aprs.CodeMissingSpaceAfterLocator); got != tc.missingSpace {
+			t.Errorf("%s: missing-space-after-locator %v, want %v", tc.name, got, tc.missingSpace)
+		}
+	}
+}

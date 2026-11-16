@@ -1,7 +1,6 @@
 package aprs
 
 import (
-	"bytes"
 	"fmt"
 	"math"
 )
@@ -273,52 +272,70 @@ func micEStatus(ctx *context, report *MicEReport, b []byte, offset int) bool {
 		s = drain(s, 0, 4)
 	}
 
-	// A grid locator and the /G symbol, then a space before any text.
+	// A grid locator and the /G symbol, then a space before any text. The space is judged on what
+	// the decoder lifts for the data: the text left after the locator once the altitude, base-91
+	// telemetry and !DAO! are out, in the same order and with the same refusals (vectors
+	// interpretations.md, "Where a Mic-E locator is read"). A space at the start of the bytes is
+	// the locator's at once, since no lifted element starts with one; otherwise the verdict waits
+	// for the lifting below. The locator's space separates it and is not part of the comment.
+	var judge func(rest []byte) (bool, bool)
 	if n, ok := locatorLen(s); ok {
 		report.Locator = Ptr(asciiUpper(lossy(s[:n])))
 		s = drain(s, 0, n+2)
-		// Base-91 telemetry and a !DAO! are lifted out before the locator is read, so a locator
-		// followed straight by them alone has nothing after it (vectors interpretations.md,
-		// "Where a Mic-E locator is read").
-		if lifted := withoutTelemetryAndDAO(s); len(lifted) > 0 {
-			if lifted[0] == ' ' {
-				// Its space is the locator's even with telemetry before it in the bytes; one at the
-				// very start is dropped here, the other is the comment's own delimiter.
-				if s[0] == ' ' {
-					s = drain(s, 0, 1)
+		if len(s) > 0 && s[0] == ' ' {
+			s = drain(s, 0, 1)
+		} else {
+			judge = func(rest []byte) (bool, bool) {
+				if len(rest) == 0 {
+					return false, true
 				}
-			} else if !ctx.tolerate(CodeMissingSpaceAfterLocator, "text straight after the grid locator; a space comes first (APRS12c ch. 10)", offset) {
-				return false
+				if rest[0] == ' ' {
+					return true, true
+				}
+				return false, ctx.tolerate(CodeMissingSpaceAfterLocator, "text straight after the grid locator; a space comes first (APRS12c ch. 10)", offset)
 			}
 		}
 	}
 
 	// A data extension at the start of the text, lifted before an altitude is looked for later on,
 	// so its bytes are never read as one (0PH} in PHG3330PH}); one later on is found by the
-	// comment's rules.
+	// comment's rules. One straight after the locator, with no space between, is read as if the
+	// space were there, and the space is missing.
 	if n, ok := micEExtension(&report.Fields, s); ok {
 		s = drain(s, 0, n)
+		if judge != nil {
+			judge = nil
+			if !ctx.tolerate(CodeMissingSpaceAfterLocator, "text straight after the grid locator; a space comes first (APRS12c ch. 10)", offset) {
+				return false
+			}
+		}
 	}
 
 	// An altitude later in the text, when none came first: a tolerated reading. Taking it out
-	// brings the bytes either side of it together, and a !DAO! across that join is not one.
-	joined := -1
+	// leaves a place nothing is read across: a !DAO!, telemetry, a PHG or another altitude is
+	// never made of the bytes either side of it. A strict decoder reads it as text.
+	t := newLiftedText(s)
 	if !firstOK {
+		// A run that shares a byte with a /A= standing whole is skipped, as a locator's bytes
+		// and a PHG's at the start are: altitudeEnd is where the last whole /A= that starts at or
+		// before the run's last byte ends.
+		altitudeEnd, scanned := 0, 0
 		for i := 0; i+3 < len(s); i++ {
+			for ; scanned <= i+3 && scanned+9 <= len(s); scanned++ {
+				if wholeAltitudeAt(s, scanned) {
+					altitudeEnd = scanned + 9
+				}
+			}
+			if altitudeEnd > i {
+				continue
+			}
 			if _, ok := micEAltitude(s[i:]); !ok {
 				continue
 			}
 			if ctx.allows(CodeMicEAltitudeNotFirst, "a Mic-E altitude after other status text instead of first (APRS12c ch. 10)", offset+i) {
 				feet, _ := micEAltitude(s[i:])
 				report.Fields.AltitudeFeet = Ptr(feet)
-				s = drain(s, i, i+4)
-				joined = i
-			} else if joinsIntoAltitude(s) {
-				// Strictly the altitude is text and telemetry and the !DAO! are lifted as usual,
-				// unless what is left holds an altitude across a place one was taken from, which a
-				// lenient reader would then take: that reading is rejected (vectors README, Mic-E).
-				ctx.error(CodeMicEAltitudeNotFirst, "lifting telemetry and the !DAO! would join the status text into a Mic-E altitude (APRS12c ch. 10)", offset+i)
-				return false
+				t.lift(i, i+4, cutOther)
 			}
 			break
 		}
@@ -327,7 +344,7 @@ func micEStatus(ctx *context, report *MicEReport, b []byte, offset int) bool {
 	// A /A= in the text wins over the Mic-E bytes, even when it says the same: whether the text
 	// gave one is seen by letting it write into an empty field.
 	report.Fields.AltitudeFeet = nil
-	ok := commentTail(ctx, &report.Fields, s, offset, joined)
+	ok := commentTail(ctx, &report.Fields, t, offset, judge)
 	report.AltitudeInComment = report.Fields.AltitudeFeet != nil
 	if !report.AltitudeInComment {
 		report.Fields.AltitudeFeet = altitudeBefore
@@ -335,31 +352,14 @@ func micEStatus(ctx *context, report *MicEReport, b []byte, offset int) bool {
 	return ok
 }
 
-// joinsIntoAltitude says whether the text left once base-91 telemetry and the !DAO! are lifted
-// out of s holds a Mic-E altitude, xxx}, across a place one was taken from.
-func joinsIntoAltitude(s []byte) bool {
-	rest := append([]byte(nil), s...)
-	// Spans come last first, so each join's place in what is left is its span's start less the
-	// lengths of the spans before it, taken out later.
-	spans := telemetryAndDAOSpans(s)
-	for _, r := range spans {
-		rest = drain(rest, r.start, r.end)
+// wholeAltitudeAt says whether s[i:] starts with a /A= altitude as findAltitude reads it: /A=
+// and six digits, or - and five.
+func wholeAltitudeAt(s []byte, i int) bool {
+	if i+9 > len(s) || string(s[i:i+3]) != "/A=" {
+		return false
 	}
-	for _, r := range spans {
-		before := 0
-		for _, o := range spans {
-			if o.start < r.start {
-				before += o.length()
-			}
-		}
-		join := r.start - before
-		for j := max(join-3, 0); j < join; j++ {
-			if _, ok := micEAltitude(rest[j:]); ok {
-				return true
-			}
-		}
-	}
-	return false
+	w := s[i+3 : i+9]
+	return allDigits(w) || (w[0] == '-' && allDigits(w[1:]))
 }
 
 // micEAltitude reads a Mic-E altitude, xxx}, at the start of s, in feet.
@@ -401,7 +401,39 @@ func locatorLen(s []byte) (int, bool) {
 // encodeMicE gives the destination address and information field for a Mic-E report. An altitude
 // goes in the Mic-E altitude bytes (whole metres) unless the report says it is in the comment, as
 // /A= feet (vectors README, Builder rules).
-func encodeMicE(r *MicEReport) (Address, []byte, *EncodeError) {
+func encodeMicE(r *MicEReport, bytesFirst bool) (forms, *EncodeError) {
+	first, err := encodeMicEForms(r, false, bytesFirst)
+	if err != nil {
+		return first, err
+	}
+	// The forms of the altitude are tried in order: the Mic-E bytes (each with the comment straight
+	// on, after a /, after a space), then a /A= only if one holds the value exactly (vectors
+	// README, Encoding). The second matters where the comment holds a /A= the bytes' form reads
+	// back as its own.
+	if f := r.Fields.AltitudeFeet; f != nil && !r.AltitudeInComment && (bytesFirst || !micEAltitudeInText(r, *f, roundSteps(*f/metresToFeet))) {
+		feet := *f
+		if nearWhole(feet) && inRange(roundSteps(feet), -99999, 999999) {
+			if second, err := encodeMicEForms(r, true, bytesFirst); err == nil {
+				return forms{
+					n: first.n + second.n,
+					at: func(i int) []byte {
+						if i < first.n {
+							return first.at(i)
+						}
+						return second.at(i - first.n)
+					},
+					dest: first.dest,
+					micE: true,
+				}, nil
+			}
+		}
+	}
+	return first, nil
+}
+
+// encodeMicEForms is encodeMicE's forms with the altitude in the Mic-E bytes, or, with inText, in a
+// /A= where one holds it.
+func encodeMicEForms(r *MicEReport, inText, bytesFirst bool) (forms, *EncodeError) {
 	f := &r.Fields
 	pend := &pending{}
 	pend.run(checkSymbol(f.Symbol))
@@ -634,7 +666,7 @@ func encodeMicE(r *MicEReport) (Address, []byte, *EncodeError) {
 	if f.AltitudeFeet != nil {
 		feet := *f.AltitudeFeet
 		metres := roundSteps(feet / metresToFeet)
-		if r.AltitudeInComment || micEAltitudeInText(r, feet, metres) {
+		if inText || r.AltitudeInComment || (!bytesFirst && micEAltitudeInText(r, feet, metres)) {
 			altitudeInText = &feet
 		} else {
 			datum := metres + 10000
@@ -782,7 +814,7 @@ func encodeMicE(r *MicEReport) (Address, []byte, *EncodeError) {
 		}
 	}
 	if err := pend.finish(); err != nil {
-		return Address{}, nil, err
+		return forms{}, err
 	}
 
 	textAt := len(out)
@@ -814,34 +846,26 @@ func encodeMicE(r *MicEReport) (Address, []byte, *EncodeError) {
 		// altitude (1{5}), where / would join them too (vectors README, Encoding).
 		separators = []string{"", "/", " "}
 	}
-	for _, separator := range separators {
-		out = out[:textAt]
-		out = append(out, separator...)
-		out = append(out, text...)
-		out = append(out, trailer...)
-		out = append(out, suffix...)
-		// A CR or LF at the end (the last byte of Rev 0 telemetry, say) reads back as a trailing
-		// line break, a warning.
-		if last := out[len(out)-1]; last == '\r' || last == '\n' {
-			return Address{}, nil, newEncodeError(RefusalInvalidCharacter, "the information field would end in a CR or LF, which reads back as a trailing line break")
-		}
-		if micEReadsBack(r, out[statusStart:]) {
-			destination, err := NewAddress(string(dest))
-			if err != nil {
-				return Address{}, nil, newEncodeError(RefusalInvalidAddress, "the Mic-E destination is not an address")
-			}
-			return destination, out, nil
-		}
+	destination, err := NewAddress(string(dest))
+	if err != nil {
+		return forms{}, newEncodeError(RefusalInvalidAddress, "the Mic-E destination is not an address")
 	}
-	return Address{}, nil, newEncodeError(RefusalTextReadsAsField, "the status text does not read back as given: a device suffix the database does not know, or text that decodes as a structured element; set the property instead")
-}
-
-// sameMetres says whether two altitudes in feet are the same to the metre.
-func sameMetres(x, y *float64) bool {
-	if x == nil || y == nil {
-		return false
+	head := out[:textAt:textAt]
+	form := func(i int) []byte {
+		b := append([]byte(nil), head...)
+		b = append(b, separators[i]...)
+		b = append(b, text...)
+		b = append(b, trailer...)
+		return append(b, suffix...)
 	}
-	return roundSteps(*x/metresToFeet) == roundSteps(*y/metresToFeet)
+	// A CR or LF at the end (the last byte of Rev 0 telemetry, say) reads back as a trailing line
+	// break, a warning.
+	if b := form(0); len(b) > 0 && (b[len(b)-1] == '\r' || b[len(b)-1] == '\n') {
+		return forms{}, newEncodeError(RefusalInvalidCharacter, "the information field would end in a CR or LF, which reads back as a trailing line break")
+	}
+	forms := formsOf(len(separators), form)
+	forms.dest, forms.micE = destination, true
+	return forms, nil
 }
 
 // nearWhole says whether x is within 1e-6 of a whole number.
@@ -870,51 +894,4 @@ func micEAltitudeInText(r *MicEReport, feet, metres float64) bool {
 		}
 	}
 	return false
-}
-
-func micEReadsBack(r *MicEReport, status []byte) bool {
-	ctx := newContext(Lenient)
-	back := MicEReport{Fields: Positioned{Symbol: r.Fields.Symbol}}
-	if !micEStatus(ctx, &back, status, 0) || ctx.hasErrors() {
-		return false
-	}
-	a, b := &back.Fields, &r.Fields
-	upper := func(s *string) *string {
-		if s == nil {
-			return nil
-		}
-		return Ptr(asciiUpper(*s))
-	}
-	datum := func(d *DAO) *rune {
-		if d == nil {
-			return nil
-		}
-		return &d.Datum
-	}
-	round := func(v *float64) *float64 {
-		if v == nil {
-			return nil
-		}
-		return Ptr(roundSteps(*v))
-	}
-	close := func(x, y *float64) bool {
-		if x == nil || y == nil {
-			return x == nil && y == nil
-		}
-		return sameNumber(*x, *y)
-	}
-	return samePtr(back.TypeCode, r.TypeCode) &&
-		bytes.Equal(back.LegacyTelemetry, r.LegacyTelemetry) &&
-		back.DeviceSuffix == r.DeviceSuffix &&
-		samePtr(upper(back.Locator), upper(r.Locator)) &&
-		a.Comment == b.Comment &&
-		samePHG(a.PHG, b.PHG) &&
-		samePtr(a.DFS, b.DFS) &&
-		sameCommentTelemetry(a.Telemetry, b.Telemetry) &&
-		samePtr(datum(a.DAO), datum(b.DAO)) &&
-		sameFrequencyFields(a.Frequency, b.Frequency) &&
-		// A /A= altitude is whole feet, rounded as a position's is.
-		// In the Mic-E altitude bytes it is whole metres, the value given rounded to the metre.
-		(close(a.AltitudeFeet, b.AltitudeFeet) || samePtr(round(a.AltitudeFeet), round(b.AltitudeFeet)) || sameMetres(a.AltitudeFeet, b.AltitudeFeet)) &&
-		samePtr(round(a.RangeMiles), round(b.RangeMiles))
 }

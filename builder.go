@@ -50,15 +50,20 @@ func (s Station) To(destination string) (Station, error) {
 }
 
 // Via gives this station with a digipeater path, such as Via("WIDE1-1", "WIDE2-1"), replacing
-// any set before. On an error it gives the station unchanged.
+// any set before. An entry ending in * is a used one, as in the neutral header form and a TNC2
+// line (Via("WIDE1-1*", "N0CALL-1*", "WIDE2-1")): the * is never part of the address. A path with
+// an entry not marked used before one that is cannot be written (a TNC2 line or an AX.25 frame
+// would read it back used) and is refused as invalid-path when the packet is built, before any
+// fault of the data. On an error it gives the station unchanged.
 func (s Station) Via(path ...string) (Station, error) {
 	entries := make([]PathEntry, 0, len(path))
 	for _, p := range path {
-		a, err := NewAddress(p)
+		text, used := strings.CutSuffix(p, "*")
+		a, err := NewAddress(text)
 		if err != nil {
 			return s, err
 		}
-		entries = append(entries, PathEntry{Address: a})
+		entries = append(entries, PathEntry{Address: a, Used: used})
 	}
 	s.path = entries
 	return s, nil
@@ -170,7 +175,11 @@ func (s Station) Data(data Data) DataBuilder {
 }
 
 func (s Station) packet(data Data) (*Packet, error) {
-	return NewPacket(s.source, s.destination, s.path, data)
+	destination := s.destination
+	if _, micE := derefData(data).(MicEReport); micE {
+		destination = Address{} // a Mic-E report works its own out
+	}
+	return NewPacket(s.source, destination, s.path, data)
 }
 
 // DataBuilder sends a Data built by hand, from Station.Data and the other one-step packets.
@@ -268,27 +277,14 @@ func (c *common) positioned(what string, micE bool) (Positioned, error) {
 		fields.Symbol = *c.symbol
 	}
 	if c.altitudeM != nil {
-		// Mic-E carries its altitude in whole metres (APRS12c ch. 10); a /A= is in feet.
-		metres := *c.altitudeM
-		if micE {
-			fields.AltitudeFeet = Ptr(roundSteps(metres) * metresToFeet)
-		} else {
-			fields.AltitudeFeet = Ptr(metres * metresToFeet)
-		}
+		// A Mic-E report carries its altitude in whole metres (APRS12c ch. 10), a /A= is in feet.
+		fields.AltitudeFeet = Ptr(*c.altitudeM * metresToFeet)
 	}
-	if micE && fields.AltitudeFeet != nil {
-		// A Mic-E altitude goes in the Mic-E altitude bytes, rounded once to the nearest metre
-		// from the value given, whatever its unit: 1000 feet is 305 metres. One outside what
-		// those bytes hold is refused, not moved to a /A= (vectors README, Builder rules); that
-		// is MicEBuilder.Data's to name, at its place in the order of refusals, so it is kept as
-		// given here.
-		feet := *fields.AltitudeFeet
-		if c.altitudeM == nil {
-			if metres := roundSteps(feet / metresToFeet); inRange(metres, -10000, 743570) {
-				fields.AltitudeFeet = Ptr(metres * metresToFeet)
-			}
-		}
-	}
+	// A Mic-E altitude goes in the Mic-E altitude bytes, rounded once to the nearest metre from
+	// the value given, whatever its unit: 1000 feet is 305 metres. A /A= only where the comment
+	// makes the bytes' form read back wrong and one holds the value exactly. One outside what the
+	// bytes hold is refused, not moved to a /A= (vectors README, Builder rules); that is
+	// MicEBuilder.Data's to name, at its place in the order of refusals.
 	// A course that rounds to 0 is the spec's unknown course, which Mic-E sends as 0 (APRS12c ch. 10).
 	if micE && fields.CourseDegrees != nil && roundSteps(*fields.CourseDegrees) == 0 {
 		fields.CourseDegrees = nil
@@ -357,7 +353,7 @@ func (b PositionBuilder) Data() (Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	return refuseMissing(d, b.common.symbol == nil)
+	return refuseMissing(d, b.common.symbol == nil, false)
 }
 
 func (b PositionBuilder) data() (Data, error) {
@@ -406,7 +402,7 @@ func (b ObjectBuilder) Data() (Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	return refuseMissing(d, b.common.symbol == nil || b.timestamp == nil)
+	return refuseMissing(d, b.common.symbol == nil || b.timestamp == nil, false)
 }
 
 func (b ObjectBuilder) data() (Data, error) {
@@ -447,7 +443,7 @@ func (b ItemBuilder) Data() (Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	return refuseMissing(d, b.common.symbol == nil)
+	return refuseMissing(d, b.common.symbol == nil, false)
 }
 
 func (b ItemBuilder) data() (Data, error) {
@@ -491,7 +487,7 @@ func (b MicEBuilder) Data() (Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	return refuseMissing(d, b.common.symbol == nil)
+	return refuseMissing(d, b.common.symbol == nil, true)
 }
 
 func (b MicEBuilder) data() (Data, error) {
@@ -509,7 +505,7 @@ func (b MicEBuilder) data() (Data, error) {
 			rest := fields
 			rest.AltitudeFeet = nil
 			typeCode := '\''
-			if _, _, other := encodeMicE(&MicEReport{MicEMessage: b.micEMessage, TypeCode: &typeCode, Fields: rest}); other != nil && other.code.rank() < fault.code.rank() {
+			if _, _, other := encodeInformation(MicEReport{MicEMessage: b.micEMessage, TypeCode: &typeCode, Fields: rest}, encodeOptions{micE: true, bytesFirst: true}); other != nil && other.code.rank() < fault.code.rank() {
 				return nil, other
 			}
 			return nil, fault
@@ -530,7 +526,10 @@ func (b MicEBuilder) data() (Data, error) {
 // Build gives the packet: the station's source and path, the destination this report computes,
 // and the report. An altitude, in either unit, goes in the Mic-E altitude bytes, rounded to the
 // nearest metre.
-func (b MicEBuilder) Build() (*Packet, error) { return build(b.station, b.data) }
+func (b MicEBuilder) Build() (*Packet, error) {
+	// The altitude goes in the Mic-E bytes first: said as an argument, not by a mark on the data.
+	return buildPacket(b.station, b.data, true, true)
+}
 
 // WeatherBuilder builds a weather report, from Station.Weather (APRS12c ch. 12). With a position
 // it is a position report with the weather station symbol; without, a positionless weather
@@ -690,7 +689,7 @@ func (b WeatherBuilder) Data() (Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	return refuseMissing(d, b.position == nil && b.timestamp == nil)
+	return refuseMissing(d, b.position == nil && b.timestamp == nil, false)
 }
 
 func (b WeatherBuilder) data() (Data, error) {
@@ -735,8 +734,21 @@ func (b MessageBuilder) ReplyAck(theirID string) MessageBuilder {
 	return b
 }
 
-// Data gives the data, without a header.
-func (b MessageBuilder) Data() (Data, error) { return b.message, nil }
+// Data gives the data, without a header. A builder given an empty message ID refuses it
+// (invalid-message-id, ranked with whatever else the message has wrong), as it refuses any ID out
+// of range; neutral data given the same writes none, an empty ID being no ID there.
+func (b MessageBuilder) Data() (Data, error) {
+	if id := b.message.MessageID; id != nil && *id == "" {
+		fault := newEncodeError(RefusalInvalidMessageID, "a message ID is 1-5 letters or digits (APRS12c ch. 14)")
+		rest := b.message
+		rest.MessageID = Ptr("0")
+		if _, other := encode(rest); other != nil && other.code.rank() < fault.code.rank() {
+			return nil, other
+		}
+		return nil, fault
+	}
+	return b.message, nil
+}
 
 // Build gives the packet: the station's header and this message, encoded.
 func (b MessageBuilder) Build() (*Packet, error) { return build(b.station, b.Data) }
@@ -860,12 +872,12 @@ func (b TelemetryBuilder) Build() (*Packet, error) { return build(b.station, b.D
 // no timestamp): it names the refusal the encoder gives it, at its place in the order, so Data
 // refuses what Build refuses. Build itself uses the unchecked data, so the header's faults and
 // these rank together in the packet's own check.
-func refuseMissing(d Data, missing bool) (Data, error) {
+func refuseMissing(d Data, missing bool, bytesFirst bool) (Data, error) {
 	if !missing {
 		return d, nil
 	}
 	if m, ok := d.(MicEReport); ok {
-		if _, _, err := encodeMicE(&m); err != nil {
+		if _, _, err := encodeInformation(m, encodeOptions{micE: true, bytesFirst: bytesFirst}); err != nil {
 			return nil, err
 		}
 		return d, nil
@@ -877,22 +889,52 @@ func refuseMissing(d Data, missing bool) (Data, error) {
 }
 
 func build(s Station, data func() (Data, error)) (*Packet, error) {
-	d, err := data()
-	if err != nil {
-		return nil, err
-	}
-	return s.packet(d)
+	return buildPacket(s, data, false, false)
 }
 
-// String gives the station's header, such as M0LTE-9>APZ001,WIDE1-1.
+// buildPacket is build, said what the builder tells the encoder: micE for a Mic-E report, which
+// computes its destination, and bytesFirst for its altitude in the Mic-E bytes first. The header
+// given is judged before the data, even before a fault the builder itself finds in it.
+func buildPacket(s Station, data func() (Data, error), micE, bytesFirst bool) (*Packet, error) {
+	d, err := data()
+	if err != nil {
+		if herr := headerFault(s.source, s.destination, s.path, micE, nil); herr != nil {
+			return nil, herr
+		}
+		return nil, err
+	}
+	destination := s.destination
+	if micE {
+		destination = Address{} // a Mic-E report works its own out; the station's is ignored
+	}
+	p, perr := newPacket(s.source, destination, s.path, d, bytesFirst)
+	if perr != nil {
+		return nil, perr
+	}
+	return p, nil
+}
+
+// String gives the station's header as text for display, such as M0LTE-9>APZ001,WIDE1-1, with a
+// * on the last used path entry as a TNC2 line has it. It is not a writer: it is total and never
+// refuses, so for a path no packet will write (an entry not marked used before one that is, which
+// Build refuses as invalid-path) it still shows the path as held.
 func (s Station) String() string {
 	var sb strings.Builder
 	sb.WriteString(s.source.text)
 	sb.WriteByte('>')
 	sb.WriteString(s.destination.text)
-	for _, e := range s.path {
+	last := -1
+	for i, e := range s.path {
+		if e.Used {
+			last = i
+		}
+	}
+	for i, e := range s.path {
 		sb.WriteByte(',')
 		sb.WriteString(e.Address.text)
+		if i == last {
+			sb.WriteByte('*')
+		}
 	}
 	return sb.String()
 }

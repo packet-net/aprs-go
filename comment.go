@@ -25,8 +25,6 @@ func isSignpostSymbol(f *Positioned) bool { return f.Symbol.Table == '\\' && f.S
 // span is a range of bytes, start included and end not.
 type span struct{ start, end int }
 
-func (s span) length() int { return s.end - s.start }
-
 // drain takes c[from:to] out of c, in place.
 func drain(c []byte, from, to int) []byte {
 	return append(c[:from], c[to:]...)
@@ -137,7 +135,7 @@ func decodeComment(ctx *context, fields *Positioned, bytes *cs, b []byte, offset
 		}
 		at = n
 	}
-	return commentTail(ctx, fields, b[at:], offset+at, -1)
+	return commentTail(ctx, fields, newLiftedText(b[at:]), offset+at, nil)
 }
 
 // weatherEnd gives where the weather text of a positioned report ends in b: the start of the
@@ -146,7 +144,7 @@ func decodeComment(ctx *context, fields *Positioned, bytes *cs, b []byte, offset
 // it counts as ending at the weather's end, and the text after it is comment text on its own.
 func weatherEnd(b []byte) int {
 	end := len(b)
-	for _, sp := range telemetryAndDAOSpans(b) {
+	for _, sp := range telemetryAndDAOSpans(newLiftedText(b)) {
 		if sp.start < end {
 			end = sp.start
 		}
@@ -156,117 +154,122 @@ func weatherEnd(b []byte) int {
 
 // weatherTail reads what follows a position's weather data: base-91 telemetry and a !DAO! are
 // lifted out first, and what is left is the software type and unit, or else text that a weather
-// report should not have.
+// report should not have. The software type and unit are one run as sent: a lifted element
+// between them is not joined over.
 func weatherTail(ctx *context, fields *Positioned, b []byte, offset int) bool {
-	c := append([]byte(nil), b...)
-	c, ok := liftTelemetryAndDAO(ctx, fields, c, offset, -1)
-	if !ok {
+	t := newLiftedText(b)
+	if !liftTelemetryAndDAO(ctx, fields, t, offset, nil) {
 		return false
 	}
 	if fields.Weather == nil {
 		fields.Weather = &Weather{}
 	}
-	if len(c) == 0 || softwareAndUnit(c, fields.Weather) {
+	if len(t.b) == 0 || (t.whole(0, len(t.b)) && softwareAndUnit(t.b, fields.Weather)) {
 		return true
 	}
 	if !ctx.tolerate(CodeWeatherComment, "text after the weather data; a weather report has no comment (UAP 2.7.1)", offset) {
 		return false
 	}
-	return finishComment(ctx, fields, c, offset)
+	return finishComment(ctx, fields, t.b, offset)
 }
 
-// liftTelemetryAndDAO lifts base-91 telemetry and a !DAO! out of c. The telemetry block is
-// located first, so a DAO-shaped run inside it is not taken for a DAO. A !DAO! is five bytes as
-// sent, so one that spans joined (where bytes were taken out before, bringing the bytes on either
-// side together; -1 for none) is not one.
-func liftTelemetryAndDAO(ctx *context, fields *Positioned, c []byte, offset, joined int) ([]byte, bool) {
-	tSpan, t, tOK := findTelemetry(c)
+// liftTelemetryAndDAO lifts base-91 telemetry and a !DAO! out of t. The telemetry block is
+// located first, so a DAO-shaped run inside it is not taken for a DAO. Each is bytes as sent, so
+// neither is read across a place something was lifted from before. judge, when not nil, is given
+// what is left of t once they are out, before the !DAO! is applied (so a defect before it is met
+// first), and says whether that text starts with a Mic-E locator's space, which is then taken
+// out too.
+func liftTelemetryAndDAO(ctx *context, fields *Positioned, t *liftedText, offset int, judge func(rest []byte) (bool, bool)) bool {
+	tSpan, tel, tOK := findTelemetry(t)
 	var tp *span
 	if tOK {
 		tp = &tSpan
 	}
-	dSpan, found, dOK := findDAO(c, tp, joined)
+	dSpan, found, dOK := findDAO(t, tp)
 	var removals []span
 	if tOK {
-		fields.Telemetry = &t
 		removals = append(removals, tSpan)
 	}
 	if dOK {
-		if !applyDAO(ctx, fields, found, offset+dSpan.start) {
-			return c, false
-		}
 		removals = append(removals, dSpan)
 	}
 	sort.SliceStable(removals, func(i, j int) bool { return removals[i].start > removals[j].start })
 	for _, r := range removals {
-		c = drain(c, r.start, r.end)
+		t.lift(r.start, r.end, cutOther)
 	}
-	return c, true
+	if judge != nil {
+		separator, ok := judge(t.b)
+		if !ok {
+			return false
+		}
+		if separator {
+			t.lift(0, 1, 0)
+		}
+	}
+	if tOK {
+		fields.Telemetry = &tel
+	}
+	if dOK {
+		if !applyDAO(ctx, fields, found, offset+dSpan.start) {
+			return false
+		}
+	}
+	return true
 }
 
-// telemetryAndDAOSpans says where the base-91 telemetry and !DAO! commentTail would lift out of c
+// telemetryAndDAOSpans says where the base-91 telemetry and !DAO! commentTail would lift out of t
 // are, last first.
-func telemetryAndDAOSpans(c []byte) []span {
+func telemetryAndDAOSpans(t *liftedText) []span {
 	var spans []span
-	tSpan, _, tOK := findTelemetry(c)
+	tSpan, _, tOK := findTelemetry(t)
 	var tp *span
 	if tOK {
 		tp = &tSpan
 		spans = append(spans, tSpan)
 	}
-	if dSpan, _, ok := findDAO(c, tp, -1); ok {
+	if dSpan, _, ok := findDAO(t, tp); ok {
 		spans = append(spans, dSpan)
 	}
 	sort.SliceStable(spans, func(i, j int) bool { return spans[i].start > spans[j].start })
 	return spans
 }
 
-// withoutTelemetryAndDAO gives c with its base-91 telemetry and !DAO! taken out, as commentTail
-// would lift them.
-func withoutTelemetryAndDAO(c []byte) []byte {
-	rest := append([]byte(nil), c...)
-	for _, r := range telemetryAndDAOSpans(c) {
-		rest = drain(rest, r.start, r.end)
-	}
-	return rest
-}
-
-// commentTail reads the comment after any data extension: it lifts out telemetry and a !DAO!
-// (from the end), then an altitude, signpost or corridor braces, a data extension found later in
-// the text, and a voice frequency at the start, in the order that keeps one from being taken for
-// another; the rest, less one leading delimiter, is the comment. joined is where bytes were
-// already taken out of the text (a Mic-E altitude), which a !DAO! does not span, or -1.
-func commentTail(ctx *context, fields *Positioned, b []byte, offset, joined int) bool {
-	c := append([]byte(nil), b...)
-	c, ok := liftTelemetryAndDAO(ctx, fields, c, offset, joined)
-	if !ok {
+// commentTail reads the comment after any data extension: it lifts out telemetry and a !DAO!,
+// then an altitude, signpost or corridor braces, a data extension found later in the text, and a
+// voice frequency at the start, in the order that keeps one from being taken for another. Each is
+// recognised only where its bytes stand whole in t; the rest, less one leading delimiter, is the
+// comment.
+func commentTail(ctx *context, fields *Positioned, t *liftedText, offset int, judge func(rest []byte) (bool, bool)) bool {
+	if !liftTelemetryAndDAO(ctx, fields, t, offset, judge) {
 		return false
 	}
 
 	// A /A= altitude is read wherever it is, and wins over a compressed or Mic-E one.
-	if i, feet, ok := findAltitude(c); ok {
+	if i, feet, ok := findAltitude(t); ok {
 		fields.AltitudeFeet = Ptr(float64(feet))
-		c = drain(c, i, i+9)
+		t.lift(i, i+9, cutAltitude)
 	}
 
-	c = braces(fields, c)
+	braces(fields, t)
 
 	if fields.PHG == nil && fields.RangeMiles == nil && fields.DFS == nil {
-		c = lateExtension(ctx, fields, c, offset)
+		lateExtension(ctx, fields, t, offset)
 	}
 
-	// A voice frequency at the start, after at most one delimiter, and one space after it.
+	// A voice frequency at the start, after at most one delimiter, and one space after it. The
+	// delimiter and that space are judged on the text left; the frequency itself is one run.
+	c := t.b
 	start := 0
 	if len(c) > 0 && (c[0] == ' ' || c[0] == '/') {
 		start = 1
 	}
-	if f, n, ok := frequencyAt(c[start:]); ok {
+	if f, n, ok := frequencyAt(t, start); ok {
 		fields.Frequency = &f
 		end := start + n
 		if end < len(c) && c[end] == ' ' {
 			end++
 		}
-		c = drain(c, 0, end)
+		c = c[end:]
 	}
 
 	return finishComment(ctx, fields, c, offset)
@@ -292,11 +295,12 @@ func finishComment(ctx *context, fields *Positioned, c []byte, offset int) bool 
 // that are not braces, and }, the characters printable ASCII for a signpost or digits for a
 // corridor; braces that are not are comment text and do not stop the search, so {5Wm{55} and {{5}
 // hold 55 and 5.
-func braces(fields *Positioned, c []byte) []byte {
+func braces(fields *Positioned, t *liftedText) {
+	c := t.b
 	signpost := isSignpostSymbol(fields)
 	corridor := fields.Area != nil && (fields.Area.Shape == AreaLineDownRight || fields.Area.Shape == AreaLineDownLeft)
 	if !signpost && !corridor {
-		return c
+		return
 	}
 	wellFormed := func(inner []byte) bool {
 		if len(inner) < 1 || len(inner) > 3 || contains(inner, '{') || contains(inner, '}') {
@@ -312,17 +316,23 @@ func braces(fields *Positioned, c []byte) []byte {
 		if c[i] != '{' {
 			continue
 		}
-		j := indexByte(c[i+1:], '}')
+		// The closing brace is within the next four bytes (1-3 characters between), so look no
+		// further: a search to the end for every { is quadratic on a long run of them.
+		window := c[i+1:]
+		if len(window) > 4 {
+			window = window[:4]
+		}
+		j := indexByte(window, '}')
 		if j < 0 {
 			continue
 		}
-		if wellFormed(c[i+1 : i+1+j]) {
+		if wellFormed(c[i+1:i+1+j]) && t.whole(i, i+2+j) {
 			open, closing = i, i+1+j
 			break
 		}
 	}
 	if open < 0 {
-		return c
+		return
 	}
 	inner := c[open+1 : closing]
 	if signpost {
@@ -332,15 +342,19 @@ func braces(fields *Positioned, c []byte) []byte {
 		area.CorridorWidthMiles = Ptr(uint16(digits(inner)))
 		fields.Area = &area
 	}
-	return drain(c, open, closing+1)
+	t.lift(open, closing+1, cutOther)
 }
+
+// maxExtensionLen is the longest data extension: PHGphgd with a beacon rate and its slash.
+const maxExtensionLen = 9
 
 // lateExtension reads a PHG, RNG or DFS extension after other comment text instead of straight
 // after the symbol: the first well-formed PHG, else the first well-formed RNG, else the first
 // well-formed DFS. A malformed one such as PHG12 is comment text and does not stop the search
 // (vectors interpretations.md, "A late data extension is the first well-formed one"). Strictly
 // that is free text (UAP 5.15); recognising it is an extra reading the options allow.
-func lateExtension(ctx *context, fields *Positioned, c []byte, offset int) []byte {
+func lateExtension(ctx *context, fields *Positioned, t *liftedText, offset int) {
+	c := t.b
 	for _, tag := range []string{"PHG", "RNG", "DFS"} {
 		var found Positioned
 		at, n := -1, 0
@@ -349,7 +363,9 @@ func lateExtension(ctx *context, fields *Positioned, c []byte, offset int) []byt
 				continue
 			}
 			found = Positioned{}
-			if l, ok := stationExtension(&found, c[i:]); ok {
+			// The extension is one run: its bytes end where something was lifted from. It is at
+			// most 9 bytes (a PHG with a beacon rate), so no scan goes further.
+			if l, ok := stationExtension(&found, c[i:t.pieceEnd(i, maxExtensionLen)]); ok {
 				at, n = i, l
 				break
 			}
@@ -359,11 +375,10 @@ func lateExtension(ctx *context, fields *Positioned, c []byte, offset int) []byt
 		}
 		if ctx.allows(CodeDataExtensionInComment, "a data extension found later in the comment; the spec puts it straight after the symbol (UAP 5.15)", offset+at) {
 			fields.PHG, fields.RangeMiles, fields.DFS = found.PHG, found.RangeMiles, found.DFS
-			c = drain(c, at, at+n)
+			t.lift(at, at+n, cutOther)
 		}
-		return c
+		return
 	}
-	return c
 }
 
 func isCourseSpeed(ext []byte) bool {
@@ -618,10 +633,11 @@ func area(b []byte) (AreaObject, bool) {
 
 // findAltitude finds /A=nnnnnn anywhere in the comment (APRS12c ch. 6), or the de facto
 // /A=-nnnnn.
-func findAltitude(c []byte) (int, int32, bool) {
+func findAltitude(t *liftedText) (int, int32, bool) {
+	c := t.b
 	for i := 0; i+9 <= len(c); i++ {
 		w := c[i : i+9]
-		if string(w[:3]) != "/A=" {
+		if string(w[:3]) != "/A=" || !t.whole(i, i+9) {
 			continue
 		}
 		if allDigits(w[3:9]) {
@@ -634,40 +650,46 @@ func findAltitude(c []byte) (int, int32, bool) {
 	return 0, 0, false
 }
 
-// findTelemetry finds base-91 comment telemetry |ss11...|: 2-7 pairs between bars.
-func findTelemetry(c []byte) (span, CommentTelemetry, bool) {
-	// Only the last two bars are considered: telemetry goes at the end of the comment.
+// findTelemetry finds base-91 comment telemetry |ss11...|: 2-7 pairs between bars. The pairs
+// slide: each bar closes one pair and opens the next. The telemetry is the LAST pair that encloses
+// a valid block (4 to 14 bytes, an even number, each 0x21 to 0x7B, whole as sent), whatever text
+// and bars follow it (vectors README, Comments; aprs-vectors#32); bars around anything else are
+// text, with no diagnostic. A block's bytes are base-91 whatever they look like. Each bar is
+// looked at once, from the end, and each pair for at most 14 bytes, so the search is linear.
+func findTelemetry(t *liftedText) (span, CommentTelemetry, bool) {
+	c := t.b
 	end := lastIndexByte(c, '|')
-	if end < 0 {
-		return span{}, CommentTelemetry{}, false
+	start := -1
+	found := false
+	for end > 0 {
+		start = lastIndexByte(c[:end], '|')
+		if start < 0 {
+			break
+		}
+		if n := end - start - 1; n >= 4 && n <= 14 && n%2 == 0 && allBase91(c[start+1:end]) && t.whole(start, end+1) {
+			found = true
+			break
+		}
+		end = start
 	}
-	start := lastIndexByte(c[:end], '|')
-	if start < 0 {
+	if !found {
 		return span{}, CommentTelemetry{}, false
 	}
 	inner := c[start+1 : end]
-	if len(inner) < 4 || len(inner) > 14 || len(inner)%2 != 0 {
-		return span{}, CommentTelemetry{}, false
-	}
-	for _, b := range inner {
-		if !isBase91(b) {
-			return span{}, CommentTelemetry{}, false
-		}
-	}
 	values := make([]uint16, 0, len(inner)/2)
 	for i := 0; i < len(inner); i += 2 {
 		v, _ := base91Decode(inner[i : i+2])
 		values = append(values, uint16(v))
 	}
-	t := CommentTelemetry{Sequence: values[0]}
+	tel := CommentTelemetry{Sequence: values[0]}
 	rest := values[1:]
 	if len(rest) == 6 {
-		t.Analog = append([]uint16(nil), rest[:5]...)
-		t.Digital = Ptr(uint8(rest[5]))
+		tel.Analog = append([]uint16(nil), rest[:5]...)
+		tel.Digital = Ptr(uint8(rest[5]))
 	} else {
-		t.Analog = append([]uint16(nil), rest...)
+		tel.Analog = append([]uint16(nil), rest...)
 	}
-	return span{start, end + 1}, t, true
+	return span{start, end + 1}, tel, true
 }
 
 // foundDAO is a !DAO! and the extra minutes of latitude and longitude it adds.
@@ -676,15 +698,16 @@ type foundDAO struct {
 	lat, lon float64
 }
 
-// findDAO finds the last !DAO! outside the telemetry block, and not across joined: !Wdd! (an
+// findDAO finds the last !DAO! outside the telemetry block, whole as sent: !Wdd! (an
 // upper-case datum, a digit each: thousandths of a minute), !wBB! (a lower-case datum, a base-91
 // character each: v/91 hundredths of a minute) or !D  ! (datum only; a letter or a digit).
-func findDAO(c []byte, telemetry *span, joined int) (span, foundDAO, bool) {
+func findDAO(t *liftedText, telemetry *span) (span, foundDAO, bool) {
+	c := t.b
 	for i := len(c) - 5; i >= 0; i-- {
 		if telemetry != nil && i+4 >= telemetry.start && i < telemetry.end {
 			continue
 		}
-		if joined >= 0 && i < joined && joined < i+5 {
+		if !t.whole(i, i+5) {
 			continue
 		}
 		w := c[i : i+5]
@@ -742,10 +765,14 @@ func equalFoldMHz(b []byte) bool {
 	return len(b) == 3 && toUpper(b[0]) == 'M' && toUpper(b[1]) == 'H' && toUpper(b[2]) == 'Z'
 }
 
-// frequencyAt reads an APRS 1.2 voice frequency at the start of c: FFF.FFFMHz or FFF.FF MHz,
-// then optional tone, offset and range fields, each after a space. It gives its length.
-func frequencyAt(c []byte) (VoiceFrequency, int, bool) {
-	if len(c) < 10 {
+// frequencyAt reads an APRS 1.2 voice frequency at start in t: FFF.FFFMHz or FFF.FF MHz, then
+// optional tone, offset and range fields, each after a space. It gives its length. The frequency
+// and each field stand whole as sent; a field also follows a place a /A= was lifted from (and
+// only that: APRS12c ch. 6 lets an altitude stand anywhere), and is complete when followed by a
+// space, the end or the place anything was lifted from.
+func frequencyAt(t *liftedText, start int) (VoiceFrequency, int, bool) {
+	c := t.b[start:]
+	if len(c) < 10 || !t.whole(start, start+10) {
 		return VoiceFrequency{}, 0, false
 	}
 	head := c[:10]
@@ -774,10 +801,14 @@ func frequencyAt(c []byte) (VoiceFrequency, int, bool) {
 		return VoiceFrequency{}, 0, false
 	}
 	at := 10
-	// Each field is a space and four characters, then a space or the end of the text.
+	// Each field is a space and four characters as one run, then a space, the end of the text or
+	// a place something was lifted from. Only a lifted /A= may come before its space.
 	field := func(at int) ([]byte, bool) {
 		b, ok := get(c, at, at+5)
-		if !ok || b[0] != ' ' || (at+5 < len(c) && c[at+5] != ' ') {
+		if !ok || b[0] != ' ' || t.cut[start+at]&^cutAltitude != 0 || !t.whole(start+at, start+at+5) {
+			return nil, false
+		}
+		if at+5 < len(c) && c[at+5] != ' ' && t.cut[start+at+5] == 0 {
 			return nil, false
 		}
 		return b[1:5], true
@@ -849,4 +880,14 @@ func microwavePrefix(letter byte) (uint32, bool) {
 		}
 	}
 	return 0, false
+}
+
+// allBase91 says whether every byte is a base-91 character, 0x21 to 0x7B.
+func allBase91(b []byte) bool {
+	for _, c := range b {
+		if !isBase91(c) {
+			return false
+		}
+	}
+	return true
 }

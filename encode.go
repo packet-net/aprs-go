@@ -3,42 +3,100 @@ package aprs
 import (
 	"fmt"
 	"math"
+	"reflect"
 )
 
 // Encoding data back into an information field. The encoder writes only what APRS12c allows, and
-// checks free text by decoding what it wrote: a comment that would read back as something else
-// (an altitude, a data extension, a !DAO!) is refused rather than silently changed.
+// every byte it writes passes one read-back (readback.go): it decodes what it wrote and checks it
+// is the data given, so a comment that would read back as something else (an altitude, a data
+// extension, a !DAO!) is written in another equivalent form or refused, never silently changed.
 
 // Encode gives the information field for data. It fails, with an *EncodeError naming the field,
-// when the data cannot be written as APRS12c allows. Mic-E data is refused, since it carries half
+// when the data cannot be written as APRS12c allows. Before it returns bytes it decodes them,
+// leniently, and checks they read back as the data given (no warning, every field the same, but a
+// number rounded to the step its form holds); where they do not it writes the next equivalent form
+// or refuses, and it never returns bytes that failed. Mic-E data is refused, since it carries half
 // its position in the destination address: use NewPacket, which works that address out. data may
 // also be a pointer to one of the data types.
 func Encode(data Data) ([]byte, error) {
-	out, err := encode(data)
+	out, _, err := encodeInformation(data, encodeOptions{})
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func encode(data Data) ([]byte, *EncodeError) {
-	out, err := encodeData(data)
-	if err == nil && len(out) > maxInformationField {
-		return nil, newEncodeError(RefusalInformationFieldTooLong, fmt.Sprintf("an information field is at most 256 bytes (APRS12c ch. 3), and this one is %d", len(out)))
+// encodeOptions are what a caller inside the package tells the encoder besides the data, as
+// arguments and never as a mark held on the data, which a caller could see and copy.
+type encodeOptions struct {
+	// micE: the data may be Mic-E, which carries half its position in the destination the call
+	// computes (Encode refuses it).
+	micE bool
+	// bytesFirst: a Mic-E builder's altitude goes in the Mic-E altitude bytes first, then in a
+	// /A= only where the bytes' form reads back wrong and a /A= holds the value exactly. Neutral
+	// data, which does not say where an altitude came from, goes in a /A= first where only that
+	// holds it exactly (vectors README, Read-back).
+	bytesFirst bool
+}
+
+// encodeInformation writes data's information field, and for Mic-E (when opts.micE is set; Encode
+// refuses it) the destination the report computes: the rules' own checks, then the forms the
+// Encoding rule allows, then THE read-back (readBack), then the size. It is how every public
+// path gets bytes, so none returns bytes that did not read back.
+func encodeInformation(data Data, opts encodeOptions) ([]byte, Address, *EncodeError) {
+	data, err := prepare(data)
+	if err != nil {
+		return nil, Address{}, err
 	}
+	if _, ok := data.(MicEReport); ok && !opts.micE {
+		return nil, Address{}, newEncodeError(RefusalNotEncodable, "Mic-E data carries half its position in the destination address, which this information field leaves out: use NewPacket")
+	}
+	f, err := formsFor(data, opts.bytesFirst)
+	if err != nil {
+		return nil, Address{}, err
+	}
+	out, dest, err := readBack(data, f)
+	if err != nil {
+		return nil, Address{}, err
+	}
+	// The size is judged last, on the bytes that read back.
+	if len(out) > maxInformationField {
+		return nil, Address{}, newEncodeError(RefusalInformationFieldTooLong, fmt.Sprintf("an information field is at most 256 bytes (APRS12c ch. 3), and this one is %d", len(out)))
+	}
+	return out, dest, nil
+}
+
+// encode is encodeInformation for data that is not Mic-E.
+func encode(data Data) ([]byte, *EncodeError) {
+	out, _, err := encodeInformation(data, encodeOptions{})
 	return out, err
 }
 
-func encodeData(data Data) ([]byte, *EncodeError) {
-	data, err := prepare(data)
-	if err != nil {
-		return nil, err
+// formsFor is the rules' own checks of data and the forms it may be written in (a Mic-E report's
+// with the destination it computes). It never gives bytes to a caller: only readBack does.
+func formsFor(data Data, bytesFirst bool) (forms, *EncodeError) {
+	if err := validate(data); err != nil {
+		return forms{}, err
 	}
-	if _, ok := data.(MicEReport); !ok {
-		if err := validate(data); err != nil {
-			return nil, err
-		}
+	var f forms
+	var err *EncodeError
+	if m, ok := data.(MicEReport); ok {
+		f, err = encodeMicE(&m, bytesFirst)
+	} else {
+		f, err = encodeForms(data)
 	}
+	// A NaN or an infinity in any number of the data is not-a-number, wherever it is and whichever
+	// field the encoder looks at: found by walking the data, not field by field, and named
+	// unless a rule that comes before it in the Refusal reasons order names a fault first.
+	if holdsNonFinite(reflect.ValueOf(data)) && (err == nil || err.code.rank() > RefusalNotANumber.rank()) {
+		return forms{}, newEncodeError(RefusalNotANumber, "a number is NaN or infinite")
+	}
+	return f, err
+}
+
+// encodeForms gives the forms an information field may be written in, after the rules' own
+// checks. It never gives bytes to a caller: only readBack does.
+func encodeForms(data Data) (forms, *EncodeError) {
 	switch d := data.(type) {
 	case PositionReport:
 		return encodePositionReport(&d)
@@ -46,15 +104,13 @@ func encodeData(data Data) ([]byte, *EncodeError) {
 		return encodeObject(&d)
 	case ItemReport:
 		return encodeItem(&d)
-	case MicEReport:
-		return nil, newEncodeError(RefusalNotEncodable, "Mic-E data carries half its position in the destination address, which this information field leaves out: use NewPacket")
 	case Message, Ack, Reject, Bulletin, NWSBulletin, TelemetryNames, TelemetryUnits, TelemetryCoefficients, TelemetryBits, DirectedQuery:
 		return encodeMessage(data)
 	}
 	return encodeOther(data)
 }
 
-func encodePositionReport(r *PositionReport) ([]byte, *EncodeError) {
+func encodePositionReport(r *PositionReport) (forms, *EncodeError) {
 	p := &pending{}
 	var out []byte
 	switch {
@@ -75,10 +131,10 @@ func encodePositionReport(r *PositionReport) ([]byte, *EncodeError) {
 	return encodePositioned(out, &r.Fields, p)
 }
 
-func encodeObject(o *ObjectReport) ([]byte, *EncodeError) {
+func encodeObject(o *ObjectReport) (forms, *EncodeError) {
 	name := []byte(o.Name)
 	if len(name) == 0 || len(name) > 9 || !isPrintableASCII(name) {
-		return nil, newEncodeError(RefusalInvalidName, "an object name is 1-9 printable ASCII characters (APRS12c ch. 11)")
+		return forms{}, newEncodeError(RefusalInvalidName, "an object name is 1-9 printable ASCII characters (APRS12c ch. 11)")
 	}
 	p := &pending{}
 	if name[len(name)-1] == ' ' {
@@ -104,10 +160,10 @@ func encodeObject(o *ObjectReport) ([]byte, *EncodeError) {
 	return encodePositioned(out, &o.Fields, p)
 }
 
-func encodeItem(i *ItemReport) ([]byte, *EncodeError) {
+func encodeItem(i *ItemReport) (forms, *EncodeError) {
 	name := []byte(i.Name)
 	if len(name) < 3 || len(name) > 9 || !isPrintableASCII(name) || contains(name, '!') || contains(name, '_') {
-		return nil, newEncodeError(RefusalInvalidName, "an item name is 3-9 printable ASCII characters other than ! and _ (APRS12c ch. 11)")
+		return forms{}, newEncodeError(RefusalInvalidName, "an item name is 3-9 printable ASCII characters other than ! and _ (APRS12c ch. 11)")
 	}
 	out := []byte{')'}
 	out = append(out, name...)
@@ -138,7 +194,7 @@ func checkTimestamp(t Timestamp) *EncodeError {
 
 // encodePositioned writes the position, symbol, extension, weather and comment of a position,
 // object or item. p holds what is already wrong with the report around it.
-func encodePositioned(out []byte, f *Positioned, p *pending) ([]byte, *EncodeError) {
+func encodePositioned(out []byte, f *Positioned, p *pending) (forms, *EncodeError) {
 	weatherSymbol := isWeatherSymbol(f)
 	if weatherSymbol && f.Weather == nil {
 		// A report with the weather station symbol reads back as weather, whatever it holds.
@@ -178,7 +234,6 @@ func encodePositioned(out []byte, f *Positioned, p *pending) ([]byte, *EncodeErr
 	if f.DAO != nil && f.DAO.Precision != DAONone && !f.Compressed {
 		daoMode = Ptr(f.DAO.Precision == DAOBase91)
 	}
-	start := len(out)
 	var daoDigitsWritten *[2]byte
 	altitudeInCS := false
 	extension := false
@@ -244,6 +299,9 @@ func encodePositioned(out []byte, f *Positioned, p *pending) ([]byte, *EncodeErr
 		}
 		if f.Area != nil && f.Area.CorridorWidthMiles != nil {
 			w := *f.Area.CorridorWidthMiles
+			if f.Area.Shape != AreaLineDownRight && f.Area.Shape != AreaLineDownLeft {
+				p.note(newEncodeError(RefusalFieldNotAllowed, "a corridor width belongs to a line area (shapes 1 and 6): this report has no place for it"))
+			}
 			if w > 999 {
 				p.note(newEncodeError(RefusalValueOutOfRange, "an area corridor width is at most 999 miles"))
 			}
@@ -304,37 +362,25 @@ func encodePositioned(out []byte, f *Positioned, p *pending) ([]byte, *EncodeErr
 	}
 	// What is wrong on its own, or between fields, is named before the read-back is tried.
 	if err := p.finish(); err != nil {
-		return nil, err
+		return forms{}, err
 	}
 
-	// Write the text as it is (after a frequency, a space first); if it does not read back
-	// unchanged, try it without the space, then after a '/' delimiter.
+	// The text as it is (after a frequency, a space first); if that does not read back, without
+	// the space, then after a '/' delimiter. A weather report has no comment, so one form.
 	separators := []string{"", "/"}
 	if f.Frequency != nil && len(text) > 0 {
 		separators = []string{" ", "", " /"}
 	}
-	differs := ""
-	for _, separator := range separators {
-		out = out[:textAt]
-		if f.Weather != nil && separator != "" {
-			break
-		}
-		out = append(out, separator...)
-		out = append(out, text...)
-		out = append(out, trailer...)
-		what, ok := positionedReadsBack(out[start:], f)
-		if ok {
-			return out, nil
-		}
-		differs = what
-	}
 	if f.Weather != nil {
-		return nil, newEncodeError(RefusalTextReadsAsField, "the weather does not read back as given: a software type and unit, or an extra field, that would read as weather fields")
+		separators = separators[:1]
 	}
-	if len(text) == 0 {
-		return nil, newEncodeError(RefusalDoesNotReadBack, fmt.Sprintf("the report does not read back as given: its %s differs", differs))
-	}
-	return nil, newEncodeError(RefusalTextReadsAsField, fmt.Sprintf("comment text contains something that decodes as a structured element (altitude, !DAO!, |telemetry|, frequency, PHG/RNG/DFS or braces), so the %s reads back differently; set the property instead", differs))
+	head := out[:textAt:textAt]
+	return formsOf(len(separators), func(i int) []byte {
+		b := append([]byte(nil), head...)
+		b = append(b, separators[i]...)
+		b = append(b, text...)
+		return append(b, trailer...)
+	}), nil
 }
 
 func containsAny(s, chars string) bool {
@@ -941,108 +987,4 @@ func telemetryInto(out []byte, t *CommentTelemetry, p *pending) []byte {
 		out = base91Encode(out, uint32(*t.Digital), 2)
 	}
 	return append(out, '|')
-}
-
-// positionedReadsBack says whether what was written for f (from the position on) decodes back
-// to the same comment and structured elements; if not, which one differs.
-func positionedReadsBack(written []byte, f *Positioned) (string, bool) {
-	ctx := newContext(Lenient)
-	decoded, ok := decodePosition(ctx, written, 0)
-	if !ok {
-		return "position", false
-	}
-	back := Positioned{Position: decoded.position, Symbol: decoded.symbol, Compressed: decoded.compressed}
-	if !decodeComment(ctx, &back, decoded.cs, written[decoded.length:], decoded.length) || ctx.hasErrors() {
-		return "comment", false
-	}
-	close := func(a, b *float64, tolerance float64) bool {
-		if a == nil || b == nil {
-			return a == nil && b == nil
-		}
-		return math.Abs(*a-*b) <= tolerance*fmax(math.Abs(*a), 1)
-	}
-	// A /A= or RNG value is written rounded to its whole step.
-	rounded := func(a, b *float64) bool {
-		return a != nil && b != nil && *a == roundSteps(*b)
-	}
-	datum := func(d *DAO) *rune {
-		if d == nil {
-			return nil
-		}
-		return &d.Datum
-	}
-	checks := []struct {
-		same bool
-		what string
-	}{
-		{back.Comment == f.Comment, "comment"},
-		{samePHG(back.PHG, f.PHG), "PHG"},
-		{samePtr(back.DFS, f.DFS), "DFS"},
-		{sameArea(back.Area, f.Area), "area"},
-		{samePtr(back.DFBearing, f.DFBearing), "DF bearing"},
-		{sameStorm(back.Storm, f.Storm), "storm data"},
-		{sameCommentTelemetry(back.Telemetry, f.Telemetry), "telemetry"},
-		{sameFrequencyFields(back.Frequency, f.Frequency), "frequency"},
-		{samePtr(back.Signpost, f.Signpost), "signpost"},
-		{samePtr(datum(back.DAO), datum(f.DAO)), "DAO"},
-		{sameWeatherText(back.Weather, f.Weather), "weather"},
-		// A compressed weather report has no comment, so an altitude the cs bytes cannot hold exactly
-		// is written as the nearest cs value alone, and reads back rounded.
-		{close(back.AltitudeFeet, f.AltitudeFeet, 0.01) || rounded(back.AltitudeFeet, f.AltitudeFeet) || (f.Weather != nil && f.Compressed && back.AltitudeFeet != nil), "altitude"},
-		{close(back.RangeMiles, f.RangeMiles, 0.1) || rounded(back.RangeMiles, f.RangeMiles), "range"},
-	}
-	for _, c := range checks {
-		if !c.same {
-			return c.what, false
-		}
-	}
-	return "", true
-}
-
-func samePHG(a, b *PHG) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	return a.Power == b.Power && a.Height == b.Height && a.Gain == b.Gain && a.Directivity == b.Directivity && samePtr(a.BeaconsPerHour, b.BeaconsPerHour)
-}
-
-func sameArea(a, b *AreaObject) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	return a.Shape == b.Shape && a.LatOffset == b.LatOffset && a.Color == b.Color && a.LonOffset == b.LonOffset && samePtr(a.CorridorWidthMiles, b.CorridorWidthMiles)
-}
-
-func sameStorm(a, b *Storm) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	return a.Kind == b.Kind && samePtr(a.SustainedWindKnots, b.SustainedWindKnots) && samePtr(a.GustKnots, b.GustKnots) &&
-		samePtr(a.CentralPressureMbar, b.CentralPressureMbar) && samePtr(a.HurricaneRadiusNM, b.HurricaneRadiusNM) &&
-		samePtr(a.TropicalStormRadiusNM, b.TropicalStormRadiusNM) && samePtr(a.WholeGaleRadiusNM, b.WholeGaleRadiusNM)
-}
-
-func sameCommentTelemetry(a, b *CommentTelemetry) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	if a.Sequence != b.Sequence || len(a.Analog) != len(b.Analog) || !samePtr(a.Digital, b.Digital) {
-		return false
-	}
-	for i := range a.Analog {
-		if a.Analog[i] != b.Analog[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// sameFrequencyFields compares the parts of a voice frequency a comment can change: its tone,
-// offset and range fields.
-func sameFrequencyFields(a, b *VoiceFrequency) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	return samePtr(a.Tone, b.Tone) && samePtr(a.ToneValue, b.ToneValue) && samePtr(a.OffsetKHz, b.OffsetKHz) &&
-		samePtr(a.Range, b.Range) && a.RangeKm == b.RangeKm && a.Narrow == b.Narrow
 }

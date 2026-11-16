@@ -96,6 +96,47 @@ func Build(input map[string]any) Outcome {
 		delete(rest, "ambiguity")
 		pending = append(pending, standIn{"not-a-number", "ambiguity is not a number"})
 	}
+	// A non-integer in a whole-unit or code field (a PHG digit, a comment telemetry sequence or
+	// value) is outside what the field holds, never rounded: this builder takes whole codes, so the
+	// refusal is made here and a 0 stands in (vectors README, Read-back).
+	if v, ok := args["ambiguity"]; ok {
+		rest["ambiguity"] = codeValue(v, &pending, "ambiguity")
+		if n, whole := asNumber(rest["ambiguity"]); whole && (n < 0 || n > 255) && n == math.Trunc(n) {
+			rest["ambiguity"] = int64(0)
+			pending = append(pending, standIn{"value-out-of-range", "ambiguity is outside what the builder holds"})
+		}
+	}
+	if f, ok := args["frequency"].(map[string]any); ok {
+		fixed := make(map[string]any, len(f))
+		for k, v := range f {
+			fixed[k] = v
+		}
+		if v, ok := f["tone_value"]; ok {
+			fixed["tone_value"] = codeValue(v, &pending, "frequency.tone_value")
+		}
+		if v, ok := f["offset_khz"]; ok {
+			fixed["offset_khz"] = codeValue(v, &pending, "frequency.offset_khz")
+			if n, isNum := asNumber(fixed["offset_khz"]); isNum && (n < math.MinInt32 || n > math.MaxInt32) {
+				fixed["offset_khz"] = int64(0)
+				pending = append(pending, standIn{"value-out-of-range", "frequency.offset_khz is outside what the builder holds"})
+			}
+		}
+		rest["frequency"] = fixed
+	}
+	if p, ok := args["phg"].(map[string]any); ok {
+		rest["phg"] = codeFields(p, &pending, "phg.")
+	}
+	if t, ok := args["telemetry"].(map[string]any); ok && input["report"] != "telemetry" {
+		fixed := codeFields(t, &pending, "telemetry.")
+		if list, ok := t["analog"].([]any); ok {
+			values := make([]any, len(list))
+			for i, v := range list {
+				values[i] = codeValue(v, &pending, "telemetry.analog")
+			}
+			fixed["analog"] = values
+		}
+		rest["telemetry"] = fixed
+	}
 	switch input["report"] {
 	case "telemetry":
 		if c, why := sequenceFault(args["sequence"]); c != "" {
@@ -129,6 +170,37 @@ func Build(input map[string]any) Outcome {
 		return r
 	}
 	return Outcome{Refusal: first.code, Reason: first.reason, Tool: true}
+}
+
+// codeFields copies an object with each number that is not a whole number replaced by 0, noting
+// the refusal it makes (not-a-number for NaN or an infinity, else value-out-of-range).
+func codeFields(o map[string]any, pending *[]standIn, at string) map[string]any {
+	out := make(map[string]any, len(o))
+	for k, v := range o {
+		out[k] = v
+		if _, isList := v.([]any); isList {
+			continue
+		}
+		out[k] = codeValue(v, pending, at+k)
+	}
+	return out
+}
+
+// codeValue is v, or a 0 standing in for a number that is not whole.
+func codeValue(v any, pending *[]standIn, name string) any {
+	f, ok := v.(float64)
+	if !ok {
+		return v
+	}
+	switch {
+	case math.IsNaN(f) || math.IsInf(f, 0):
+		*pending = append(*pending, standIn{"not-a-number", name + " is not a number"})
+		return int64(0)
+	case f != math.Trunc(f):
+		*pending = append(*pending, standIn{"value-out-of-range", name + " is not a whole number"})
+		return int64(0)
+	}
+	return v
 }
 
 // sequenceFault says what refuses a telemetry sequence the builder cannot take: not-a-number for
@@ -179,4 +251,38 @@ func buildFinite(input map[string]any) Outcome {
 		panic(err)
 	}
 	return Outcome{Packet: p}
+}
+
+// Written is a recipe built and written out: a TNC2 line, or an AX.25 frame in KISS form without
+// flags or FCS, or the refusal that stopped it.
+type Written struct {
+	Outcome
+	// Bytes is the line or frame, when there is one.
+	Bytes []byte
+}
+
+// Write builds a recipe and writes the packet as a TNC2 line, or as an AX.25 frame when frame is
+// set. The header is read back by the library's writers, so a path they cannot carry is refused
+// there (tnc2-cannot-carry, ax25-cannot-carry). A data fault or the size refusal the builder
+// found comes before a header the form cannot carry, which is last in the refusal order.
+func Write(input map[string]any, frame bool) Written {
+	o := Build(input)
+	if o.Unsupported != "" {
+		return Written{Outcome: o}
+	}
+	if o.Refusal != "" {
+		return Written{Outcome: o}
+	}
+	var b []byte
+	var err error
+	if frame {
+		b, err = o.Packet.AX25()
+	} else {
+		b, err = o.Packet.TNC2Line()
+	}
+	if err != nil {
+		e := err.(*aprs.EncodeError)
+		return Written{Outcome: Outcome{Refusal: e.Code().ID(), Reason: e.Error()}}
+	}
+	return Written{Outcome: o, Bytes: b}
 }

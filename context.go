@@ -55,15 +55,6 @@ func (c *context) allows(code Code, message string, offset int) bool {
 	return false
 }
 
-func (c *context) hasErrors() bool {
-	for _, d := range c.diagnostics {
-		if d.Severity == Error {
-			return true
-		}
-	}
-	return false
-}
-
 func (c *context) headerError() *HeaderError {
 	d := make([]Diagnostic, len(c.diagnostics))
 	copy(d, c.diagnostics)

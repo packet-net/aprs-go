@@ -103,21 +103,3 @@ func (t Timestamp) bytes() []byte {
 func pair(b []byte) uint8 {
 	return (b[0]-'0')*10 + (b[1] - '0')
 }
-
-// sameTimestamp compares two optional timestamps by the fields their kind uses.
-func sameTimestamp(a, b *Timestamp) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	if a.Kind != b.Kind {
-		return false
-	}
-	switch a.Kind {
-	case DayHourMinute:
-		return a.Day == b.Day && a.Hour == b.Hour && a.Minute == b.Minute && a.UTC == b.UTC
-	case HourMinuteSecond:
-		return a.Hour == b.Hour && a.Minute == b.Minute && a.Second == b.Second
-	default:
-		return a.Month == b.Month && a.Day == b.Day && a.Hour == b.Hour && a.Minute == b.Minute
-	}
-}

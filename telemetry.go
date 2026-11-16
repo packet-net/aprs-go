@@ -85,7 +85,7 @@ func decodeTelemetry(ctx *context, info []byte) Data {
 	return t
 }
 
-func encodeTelemetry(t *Telemetry) ([]byte, *EncodeError) {
+func encodeTelemetry(t *Telemetry) (forms, *EncodeError) {
 	p := &pending{}
 	// The sequence is fixed-form text: letters and digits, or MIC.
 	// A sequence left out (the empty string, as for any absent text) is missing-field.
@@ -142,21 +142,7 @@ func encodeTelemetry(t *Telemetry) ([]byte, *EncodeError) {
 	}
 	out = append(out, t.Comment...)
 	if err := p.finish(); err != nil {
-		return nil, err
+		return forms{}, err
 	}
-	// The read-back is the safety net (a sequence starting MIC is refused as malformed above).
-	if back, ok := decodeTelemetry(newContext(Lenient), out).(Telemetry); ok &&
-		back.Sequence == t.Sequence && samePtr(back.Bits, t.Bits) && back.Comment == t.Comment && len(back.Analog) == len(t.Analog) {
-		same := true
-		for i := range back.Analog {
-			x, y := back.Analog[i], t.Analog[i]
-			if (x == nil) != (y == nil) || (x != nil && *x != *y) {
-				same = false
-			}
-		}
-		if same {
-			return out, nil
-		}
-	}
-	return nil, newEncodeError(RefusalTextReadsAsField, "the telemetry report would not read back as given")
+	return onlyForm(out), nil
 }

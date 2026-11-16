@@ -409,14 +409,16 @@ func TestCodesMatchTheVectors(t *testing.T) {
 		eq(t, aprs.Lenient.Tolerates(code), code.Tolerable())
 		eq(t, aprs.Strict.Tolerates(code), false)
 	}
+	// Every refusal the vectors list is a code this package has under the same id (new codes come
+	// last in the constants, so their order is not the list's).
 	refusals := doc.(map[string]any)["refusals"].([]any)
 	allRefusals := aprs.AllRefusalCodes()
 	eq(t, len(allRefusals), len(refusals))
-	for i, r := range refusals {
+	for _, r := range refusals {
 		id := r.(map[string]any)["id"].(string)
 		code, ok := aprs.RefusalCodeFromID(id)
-		if !ok || i >= len(allRefusals) || allRefusals[i] != code || code.ID() != id {
-			t.Errorf("refusal %s is not number %d", id, i)
+		if !ok || code.ID() != id {
+			t.Errorf("refusal %s is not a code of this package", id)
 		}
 	}
 }
@@ -459,7 +461,7 @@ func TestParseOptionsZeroValueIsLenientAndEveryCodeIsSafe(t *testing.T) {
 // To and Via keep the station on an error, and an empty address is never written.
 func TestAnEmptyAddressIsRefused(t *testing.T) {
 	base := me(t)
-	via, err := base.Via("WIDE1-1", "bad*")
+	via, err := base.Via("WIDE1-1", "bad entry*")
 	if err == nil || via.String() != base.String() {
 		t.Errorf("Via gave %s, %v", via, err)
 	}
@@ -701,4 +703,51 @@ func TestMicELocatorThenTelemetryThenASpacedCommentHasItsSpace(t *testing.T) {
 	m := p.Data.(aprs.MicEReport)
 	eq(t, *m.Locator, "IO91")
 	eq(t, m.Fields.Comment, "DG2MM")
+}
+
+// The locator's space is judged on the text after every lifted element is out: a later Mic-E
+// altitude, and whole base-91 telemetry after it. Telemetry the altitude splits is text.
+func TestMicELocatorSpaceAfterALaterAltitudeAndTheTelemetryItLeaves(t *testing.T) {
+	const telemetry = `!:&0hl!Y[/>` + `"4e}` + `='p`
+	for _, tc := range []struct {
+		name, status, comment string
+		whole                 bool
+	}{
+		{"spaced comment", `"4e}|!:&0'p| DG2MM`, "DG2MM", true},
+		{"nothing after the bars", `"4e}|!:&0'p|`, "", true},
+		{"altitude between the locator and the bars", `"4e} |!:&0'p| DG2MM`, "DG2MM", true},
+		{"telemetry split by the altitude is text", "|" + telemetry + "| DG2MM", "|!:&0hl!Y[/>='p| DG2MM", false},
+		{"split telemetry, nothing after the bars", "|" + telemetry + "|", "|!:&0hl!Y[/>='p|", false},
+		{"altitude at the start of the bars", "|" + `"4e}!:&0hl!Y[/>='p` + "| DG2MM", "|!:&0hl!Y[/>='p| DG2MM", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			line := []byte("N0CALL>S32UVT:`(_fn\"Oj/`IO91/G" + tc.status)
+			p, err := aprs.DecodeTNC2(line, aprs.Lenient)
+			if err != nil {
+				t.Fatal(err)
+			}
+			missing := false
+			for _, d := range p.Diagnostics {
+				if d.Code == aprs.CodeMissingSpaceAfterLocator {
+					missing = true
+				}
+			}
+			if missing == tc.whole {
+				t.Errorf("missing-space-after-locator %v for whole telemetry %v", missing, tc.whole)
+			}
+			m := p.Data.(aprs.MicEReport)
+			eq(t, m.Fields.Comment, tc.comment)
+			if m.Fields.AltitudeFeet == nil || (m.Fields.Telemetry != nil) != tc.whole {
+				t.Errorf("telemetry %v altitude %v", m.Fields.Telemetry, m.Fields.AltitudeFeet)
+			}
+		})
+	}
+	// Strict leaves the altitude as text, so there is no telemetry and the space is missing.
+	p, err := aprs.DecodeTNC2([]byte("N0CALL>S32UVT:`(_fn\"Oj/`IO91/G|"+telemetry+"| DG2MM"), aprs.Strict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, bad := p.Data.(aprs.MicEReport); bad {
+		t.Errorf("strict accepted %v", p.Data)
+	}
 }
