@@ -50,3 +50,33 @@ func BenchmarkDecodeMixed(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkWriteDecodedMixed writes seven decoded lines back as TNC2 lines: the cost of a packet
+// writer, which reads the field back under the header it writes.
+func BenchmarkWriteDecodedMixed(b *testing.B) {
+	lines := []string{
+		"N0CALL-9>APZ001,WIDE1-1,qAR,M0LTE-10:=5130.00N/00007.00W>088/036Mobile",
+		"N0CALL-9>APZ001:!/5L!!<*e7>7P[Compressed",
+		"N0CALL-9>APZ001:;OBJECT   *010203z5130.00N/00030.00W>",
+		"N0CALL-9>APZ001::N0CALL   :Hello there{42",
+		"N0CALL-9>APZ001:>On air and listening",
+		"N0CALL-9>APZ001:T#001,001,002,003,004,005,00000000",
+		"N0CALL-9>S32UVT:`(_fn\"Oj/`\"4e}Mic-E comment",
+	}
+	packets := make([]*aprs.Packet, len(lines))
+	for i, l := range lines {
+		p, err := aprs.DecodeTNC2([]byte(l), aprs.Lenient)
+		if err != nil {
+			b.Fatal(err)
+		}
+		packets[i] = p
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		for _, p := range packets {
+			if _, err := p.TNC2Line(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}

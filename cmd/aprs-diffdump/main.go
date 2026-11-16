@@ -245,7 +245,7 @@ func reencode(p *aprs.Packet) (string, []byte, *string, *aprs.RefusalCode) {
 	m, isMicE := p.Data.(aprs.MicEReport)
 	if isMicE {
 		var created *aprs.Packet
-		created, err = aprs.NewPacket(p.Source, p.Destination, p.Path, m)
+		created, err = aprs.NewPacket(p.Source, aprs.Address{}, p.Path, m)
 		if err == nil {
 			info, destination = created.Information, created.Destination
 		}
@@ -390,7 +390,7 @@ func encodeRecord(input map[string]any) map[string]any {
 	var err error
 	if m, ok := data.(aprs.MicEReport); ok {
 		var p *aprs.Packet
-		p, err = aprs.NewPacket(source, destination, nil, m)
+		p, err = aprs.NewPacket(source, aprs.Address{}, nil, m)
 		if err == nil {
 			info, destination = p.Information, p.Destination
 		}

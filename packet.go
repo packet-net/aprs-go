@@ -206,6 +206,9 @@ type Packet struct {
 	// ThirdParty: this packet was carried inside a third-party packet. Its header is kept as sent:
 	// an APRS-IS q-construct is read only in the outer header, so QConstruct finds none here.
 	ThirdParty bool
+	// decoded is set on a packet a decoder made, which the writers compare with their read-back
+	// exactly; a packet built from data is compared with the rounding the form written allows.
+	decoded bool
 }
 
 // DecodeTNC2 decodes a TNC2 / APRS-IS text line, SOURCE>DEST,PATH:information. The only error is
@@ -405,13 +408,14 @@ func decodeWithContext(ctx *context, source, destination Address, path []PathEnt
 	// information is the packet's own: the caller copied it, or it is a third-party packet's
 	// share of the outer packet's.
 	data := decodeInformation(ctx, destination, information)
-	return &Packet{Source: source, Destination: destination, Path: path, Information: information, Data: data, Diagnostics: ctx.diagnostics}
+	return &Packet{Source: source, Destination: destination, Path: path, Information: information, Data: data, Diagnostics: ctx.diagnostics, decoded: true}
 }
 
 // NewPacket builds a packet from data, encoding its information field. For Mic-E data the
 // destination address is worked out from the report (it carries the latitude, message code and
-// digipeat path, APRS12c ch. 10), and destination is not used. An empty address (the zero
-// Address) is refused with RefusalInvalidAddress, and a path with an entry not marked used before
+// digipeat path, APRS12c ch. 10): give the zero Address, or DefaultDestination, to have it worked
+// out; any other destination that is not the one worked out is refused with RefusalNotEncodable, never substituted. For any other
+// data an empty address (the zero Address) is refused with RefusalInvalidAddress, and a path with an entry not marked used before
 // one that is with RefusalInvalidPath, both before any fault of the data. The information field is
 // read back as Encode's is. The header is written, and read back, by TNC2, TNC2Line, AX25 and
 // KISS, which refuse what their form cannot carry. data may also be a pointer to one of the data
@@ -441,6 +445,11 @@ func newPacket(source, destination Address, path []PathEntry, data Data, bytesFi
 	if info, computed, err := encodeInformation(data, encodeOptions{micE: true, bytesFirst: bytesFirst}); pend.run(err) {
 		information = info
 		if micE {
+			// An empty destination means "work it out"; one given must be the one worked out, which
+			// is never substituted for it.
+			if destination.text != "" && destination.text != DefaultDestination && destination != computed {
+				pend.note(newEncodeError(RefusalNotEncodable, "a Mic-E report is made by its own destination, "+computed.text+" for this report: the destination given ("+destination.text+") is not it (give the zero Address or "+DefaultDestination+" to have it worked out)"))
+			}
 			destination = computed
 		}
 	}
@@ -623,22 +632,84 @@ func isMicEIdentifier(b byte) bool {
 // a field that reads as other data under this header than the data the packet holds (Mic-E bytes
 // put under a destination that makes them a Mic-E report, a Mic-E report put under one that does
 // not, or under another Mic-E one) is not-encodable. The computed destination is never
-// substituted for the one given. Only a packet that is Mic-E one way or the other is judged;
-// every other held packet is written as it stands.
+// substituted for the one given. Every held packet is judged, whatever its type: a packet a
+// decoder made is compared exactly, one built from data with the rounding of the form written.
 func (p *Packet) readsAsHeld() *EncodeError {
-	_, heldMicE := derefData(p.Data).(MicEReport)
-	if !heldMicE && !(len(p.Information) > 0 && isMicEIdentifier(p.Information[0])) {
-		return nil
+	if p.unreadBelow() {
+		return nil // held as unread, it matches whatever the field decodes to on its own
 	}
+	_, heldMicE := derefData(p.Data).(MicEReport)
+	micE := heldMicE || (len(p.Information) > 0 && isMicEIdentifier(p.Information[0]))
 	for _, options := range []ParseOptions{Lenient, Strict} {
 		back := decodeInformation(newContext(options), p.Destination, p.Information)
+		held := derefData(p.Data)
+		if !p.decoded {
+			held = expectedBack(p.Data, back)
+		}
+		want, got := neutralData(held), neutralData(back)
+		openUnreadLevel(held, want, got)
+		innerDiagnostics(want)
+		innerDiagnostics(got)
 		var differences []string
-		nfDifferences(neutralData(expectedBack(p.Data, back)), neutralData(back), "", &differences)
+		nfDifferences(want, got, "", &differences)
 		if len(differences) == 0 {
 			return nil
 		}
 	}
-	return newEncodeError(RefusalNotEncodable, "the information field reads as other data under the destination it is written with: a Mic-E report is made by its own destination, which is not substituted for the one given")
+	msg := "the data the packet holds and its information field do not agree: the field reads as other data under the header written"
+	if micE {
+		msg += " (a Mic-E report is made by its own destination, which is not substituted for the one given)"
+	}
+	return newEncodeError(RefusalNotEncodable, msg)
+}
+
+// openUnreadLevel makes a level held as unread, a third-party packet whose own `}` was past the
+// four levels a decoder reads, match whatever the field decodes to there on its own: a decode of
+// a field that sits inside a nest reads further down than the held packet could.
+func openUnreadLevel(held Data, want, got map[string]any) {
+	for {
+		tp, ok := derefData(held).(ThirdParty)
+		if !ok || tp.Packet == nil {
+			return
+		}
+		wp, _ := want["packet"].(map[string]any)
+		gp, _ := got["packet"].(map[string]any)
+		if wp == nil || gp == nil {
+			return
+		}
+		if tp.Packet.unreadBelow() {
+			wp["data"] = gp["data"]
+			if d, ok := gp["diagnostics"]; ok {
+				wp["diagnostics"] = d
+			} else {
+				delete(wp, "diagnostics")
+			}
+			return
+		}
+		held = tp.Packet.Data
+		want, _ = wp["data"].(map[string]any)
+		got, _ = gp["data"].(map[string]any)
+		if want == nil || got == nil {
+			return
+		}
+	}
+}
+
+// unreadBelow says whether the packet holds nothing for its information field because it is a
+// third-party packet nested past what a decoder reads.
+func (p *Packet) unreadBelow() bool {
+	if _, ok := derefData(p.Data).(Unrecognized); p.Data != nil && !ok {
+		return false
+	}
+	if len(p.Information) == 0 || p.Information[0] != '}' {
+		return false
+	}
+	for _, d := range p.Diagnostics {
+		if d.Code == CodeInvalidThirdParty && strings.Contains(d.Message, "nest at most") {
+			return true
+		}
+	}
+	return false
 }
 
 // hasInnerLineBreak says whether an information field has a CR or LF before its trailing line

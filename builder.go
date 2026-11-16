@@ -175,7 +175,11 @@ func (s Station) Data(data Data) DataBuilder {
 }
 
 func (s Station) packet(data Data) (*Packet, error) {
-	return NewPacket(s.source, s.destination, s.path, data)
+	destination := s.destination
+	if _, micE := derefData(data).(MicEReport); micE {
+		destination = Address{} // a Mic-E report works its own out
+	}
+	return NewPacket(s.source, destination, s.path, data)
 }
 
 // DataBuilder sends a Data built by hand, from Station.Data and the other one-step packets.
@@ -899,7 +903,11 @@ func buildPacket(s Station, data func() (Data, error), micE, bytesFirst bool) (*
 		}
 		return nil, err
 	}
-	p, perr := newPacket(s.source, s.destination, s.path, d, bytesFirst)
+	destination := s.destination
+	if micE {
+		destination = Address{} // a Mic-E report works its own out; the station's is ignored
+	}
+	p, perr := newPacket(s.source, destination, s.path, d, bytesFirst)
 	if perr != nil {
 		return nil, perr
 	}

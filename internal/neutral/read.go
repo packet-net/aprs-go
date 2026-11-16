@@ -1198,7 +1198,7 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 		// Mic-E data carries half its position in the destination: the inner packet is written
 		// under the destination it computes, and one given that differs is not substituted: the
 		// field would read as other data under the header, not-encodable.
-		made, perr := aprs.NewPacket(aprs.MustAddress("N0CALL"), destination, nil, d)
+		made, perr := aprs.NewPacket(aprs.MustAddress("N0CALL"), aprs.Address{}, nil, d)
 		if perr != nil {
 			e := perr.(*aprs.EncodeError)
 			return nil, refused(e.Code(), "the inner packet's data: "+e.Error())

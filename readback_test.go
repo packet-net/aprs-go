@@ -209,7 +209,7 @@ func TestNaiveBytesThatReadBackAsSomethingElseAreNotWritten(t *testing.T) {
 					t.Fatal(err)
 				}
 				switch e.Code() {
-				case aprs.RefusalTextReadsAsField, aprs.RefusalInvalidAddressee, aprs.RefusalDoesNotReadBack:
+				case aprs.RefusalTextReadsAsField, aprs.RefusalInvalidAddressee, aprs.RefusalDoesNotReadBack, aprs.RefusalNotEncodable:
 					return
 				}
 				t.Fatalf("refused for another reason: %v (%s)", err, e.Code().ID())
@@ -417,7 +417,7 @@ func TestThirdPartyIsReadBackWhole(t *testing.T) {
 	wrong := *inner
 	wrong.Data = aprs.Status{Text: "goodbye"}
 	_, err = aprs.Encode(aprs.ThirdParty{Packet: &wrong})
-	if c := refusal(t, err); c != aprs.RefusalTextReadsAsField && c != aprs.RefusalDoesNotReadBack {
+	if c := refusal(t, err); c != aprs.RefusalTextReadsAsField && c != aprs.RefusalDoesNotReadBack && c != aprs.RefusalNotEncodable {
 		t.Errorf("refused with %s", c.ID())
 	}
 	// Nor one whose information field decodes with a warning the data does not give.

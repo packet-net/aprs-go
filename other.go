@@ -710,13 +710,24 @@ func encodeOther(data Data) (forms, *EncodeError) {
 		// Only the inner header of the packet being written is judged: a deeper level's header sits
 		// inside an information field, which is written as received.
 		p.note(thirdPartyHeader(levels[0]))
-		// Each inner packet's field is read under the destination it is written with: Mic-E data
-		// or Mic-E bytes under a destination that does not match them are not-encodable.
-		for _, level := range levels {
-			p.note(level.readsAsHeld())
+		// A deeper level's header is written as received, but a path no line reads back as held is
+		// a fault of the header all the same.
+		for _, level := range levels[1:] {
+			if pathOutOfOrder(level.Path) {
+				p.note(newEncodeError(RefusalInvalidThirdPartyHeader, "a path entry not marked used before one that is reads back used: it cannot be written"))
+			}
 		}
+		// Each inner packet's field is read under the destination it is written with, and what it
+		// reads as must be the data held (not-encodable otherwise), judged last.
 		for _, level := range levels {
 			p.note(innerDataFault(level.Data))
+		}
+		// The read-back's finding comes after every rule check: a header or data fault beside it
+		// wins.
+		if p.err == nil {
+			for _, level := range levels {
+				p.note(level.readsAsHeld())
+			}
 		}
 		if err := p.finish(); err != nil {
 			return forms{}, err

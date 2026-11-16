@@ -119,7 +119,7 @@ New codes may be added in later 1.x releases, so give a switch over them a defau
 
 ## Mic-E and device identification
 
-Mic-E carries half its position in the destination address, so `NewPacket` works that address out (the destination you pass is not used), and `Encode` refuses a Mic-E report rather than drop half of it. `packet.Device()` names the sending device or program from the [APRS device identification database](https://github.com/aprsorg/aprs-deviceid).
+Mic-E carries half its position in the destination address, so `NewPacket` works that address out (pass the zero `Address` or `DefaultDestination`; any other destination that is not the one worked out is refused), and `Encode` refuses a Mic-E report rather than drop half of it. `packet.Device()` names the sending device or program from the [APRS device identification database](https://github.com/aprsorg/aprs-deviceid).
 
 ```go
 packet, _ := aprs.DecodeTNC2([]byte("N1JCM-9>TRQP7T,WA1PLE-4*:`c'wl|+>/`\"4-}_%"), aprs.Lenient)
