@@ -281,3 +281,31 @@ func TestHeldMicEReportReAddressedToAnotherMicEDestination(t *testing.T) {
 		t.Errorf("a built packet under its computed destination: %q, %v", line, err)
 	}
 }
+
+// A defect of one field or entry is listed once for each occurrence (two empty path entries, in an
+// outer header and in an inner one alike), a judgement about a whole once (several used markers,
+// a text's control characters), and a strict decoder lists only what it met up to the defect it
+// rejects by.
+func TestDiagnosticsAreListedPerOccurrenceAndStrictStopsAtTheFirst(t *testing.T) {
+	count := func(ds []aprs.Diagnostic, code aprs.Code) int {
+		n := 0
+		for _, d := range ds {
+			if d.Code == code {
+				n++
+			}
+		}
+		return n
+	}
+	outer, _ := aprs.DecodeTNC2([]byte("N0CALL>APZ001,,,WIDE1-1:>hi"), aprs.Lenient)
+	eq(t, count(outer.Diagnostics, aprs.CodeEmptyPathEntry), 2)
+	nested, _ := aprs.DecodeTNC2([]byte("N0CALL>APZ001:}A>B,,:>hi"), aprs.Lenient)
+	eq(t, count(nested.Data.(aprs.ThirdParty).Packet.Diagnostics, aprs.CodeEmptyPathEntry), 2)
+	markers, _ := aprs.DecodeTNC2([]byte("N0CALL>APZ001,A*,B*,C*:>hi"), aprs.Lenient)
+	eq(t, count(markers.Diagnostics, aprs.CodeMultipleUsedMarkers), 1)
+	text, _ := aprs.DecodeTNC2([]byte("N0CALL>APZ001:>a\x01b\x02c"), aprs.Lenient)
+	eq(t, count(text.Diagnostics, aprs.CodeControlCharacterInText), 1)
+	hemispheres, _ := aprs.DecodeTNC2([]byte("N0CALL>APZ001:!5130.00n/00030.00w>"), aprs.Lenient)
+	eq(t, count(hemispheres.Diagnostics, aprs.CodeLowercaseHemisphere), 2)
+	strict, _ := aprs.DecodeTNC2([]byte("N0CALL>APZ001:!5130.00n/00030.00w>\x01x"), aprs.Strict)
+	eq(t, len(strict.Diagnostics), 1)
+}
