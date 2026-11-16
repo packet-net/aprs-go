@@ -464,7 +464,7 @@ func writeWeatherFields(out []byte, w *Weather, p *pending) []byte {
 		h := roundSteps(original)
 		if !inRange(h, 1, 100) {
 			code := refusalForValue(original)
-			if h >= 0 && h < 1 && original >= 0 {
+			if h >= 0 && h < 1 { // -0.4 rounds to 0 too
 				code = RefusalValueHasNoForm
 			}
 			p.note(newEncodeError(code, "humidity must round to 1-100 percent"))

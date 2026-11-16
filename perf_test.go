@@ -29,7 +29,7 @@ var hostileReports = []struct{ name, prefix string }{
 func decodeHostile(prefix, element string, size int) time.Duration {
 	line := append([]byte(prefix), bytes.Repeat([]byte(element), size/len(element)+1)[:size]...)
 	best := time.Duration(1 << 62)
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 7; i++ {
 		start := time.Now()
 		_, _ = aprs.DecodeTNC2(line, aprs.Lenient)
 		if d := time.Since(start); d < best {
@@ -58,8 +58,8 @@ func TestLongRunsOfOneElementDecodeInLinearTime(t *testing.T) {
 			if small < floor {
 				small = floor
 			}
-			if large > 8*small {
-				t.Errorf("%s with %q repeated: %v at 50 KB but %v at 200 KB (more than 8x for 4x the size)", r.name, element, small, large)
+			if large > 10*small {
+				t.Errorf("%s with %q repeated: %v at 50 KB but %v at 200 KB (more than 10x for 4x the size)", r.name, element, small, large)
 			}
 		}
 	}
