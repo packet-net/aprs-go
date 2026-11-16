@@ -122,3 +122,16 @@ func TestInnerMicEDestinationMismatchComesAfterTheRuleChecks(t *testing.T) {
 		t.Errorf("a data fault beside a wrong destination: got %q", code)
 	}
 }
+
+// An inner packet given as neutral data is built from data, not decoded: values between the form's
+// steps are written with the read-back's rounding allowance, where a decoded packet is compared
+// exactly.
+func TestInnerDataBetweenStepsIsWritten(t *testing.T) {
+	data := map[string]any{"type": "third-party", "packet": map[string]any{
+		"source": "N0CALL", "destination": "APZ001",
+		"data": map[string]any{"type": "position", "latitude": -34.634, "longitude": 150.1234, "symbol": "/>", "course_degrees": 196.25},
+	}}
+	if code, _ := settled(t, data); code != "" {
+		t.Errorf("got %q", code)
+	}
+}

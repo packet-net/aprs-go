@@ -1222,10 +1222,9 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 		}
 		information = info
 	}
-	inner := aprs.Decode(source, destination, entries, information, aprs.Lenient)
-	inner.Data = data
-	inner.Diagnostics = diagnostics
-	inner.ThirdParty = true
+	// Built from data, not decoded: its data is held as given, so the writers compare it with the
+	// rounding the form written allows.
+	inner := &aprs.Packet{Source: source, Destination: destination, Path: entries, Information: information, Data: data, Diagnostics: diagnostics, ThirdParty: true}
 	return aprs.ThirdParty{Packet: inner}, nil
 }
 
