@@ -3,6 +3,7 @@ package aprs
 import (
 	"fmt"
 	"math"
+	"strings"
 )
 
 // windMode says how the wind is read from the weather fields.
@@ -398,9 +399,11 @@ func weatherNumber(b []byte) float64 {
 
 // isSoftwareAndUnit says whether rest is exactly the software type and unit: a letter and a 2-4
 // character unit of letters, digits, - or _, not all digits (wRSW, eMB64, tU2k). A letter
-// followed only by digits is a malformed weather field instead (b0990).
+// followed only by digits is a malformed weather field instead (b0990), and text that starts like
+// a field is text (t2h35, s12a, t-5ab; vectors interpretations.md, "Text after the weather fields
+// that starts like a field").
 func isSoftwareAndUnit(rest []byte) bool {
-	if len(rest) < 3 || len(rest) > 5 || !isAlpha(rest[0]) {
+	if len(rest) < 3 || len(rest) > 5 || !isAlpha(rest[0]) || startsLikeAField(rest) {
 		return false
 	}
 	allDigit := true
@@ -416,6 +419,15 @@ func isSoftwareAndUnit(rest []byte) bool {
 		}
 	}
 	return true
+}
+
+// startsLikeAField says whether rest starts with a letter APRS12c defines as a weather field
+// followed by a digit, or with t followed by - and a digit.
+func startsLikeAField(rest []byte) bool {
+	if len(rest) >= 3 && rest[0] == 't' && rest[1] == '-' && isDigit(rest[2]) {
+		return true
+	}
+	return len(rest) >= 2 && strings.IndexByte("csgtrpPhbLl", rest[0]) >= 0 && isDigit(rest[1])
 }
 
 // softwareAndUnit reads the software type and unit (see isSoftwareAndUnit) into w.
