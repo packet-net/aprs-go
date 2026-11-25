@@ -1201,7 +1201,20 @@ func readThirdParty(o *keys) (aprs.Data, *Unreadable) {
 		made, perr := aprs.NewPacket(aprs.MustAddress("N0CALL"), aprs.Address{}, nil, d)
 		if perr != nil {
 			e := perr.(*aprs.EncodeError)
-			return nil, refused(e.Code(), "the inner packet's data: "+e.Error())
+			// Past every rule check, Mic-E data under a destination it does not compute is
+			// not-encodable, before what the read-back found: the destination does not depend on
+			// the comment, so the report without one says what it computes.
+			switch e.Code() {
+			case aprs.RefusalTextReadsAsField, aprs.RefusalDoesNotReadBack, aprs.RefusalInformationFieldTooLong:
+				bare := d
+				bare.Fields.Comment = ""
+				if m, berr := aprs.NewPacket(aprs.MustAddress("N0CALL"), aprs.Address{}, nil, bare); berr == nil && m.Destination != destination {
+					made, perr = m, nil
+				}
+			}
+			if perr != nil {
+				return nil, refused(e.Code(), "the inner packet's data: "+e.Error())
+			}
 		}
 		if made.Destination != destination {
 			// The read-back's finding, after every rule check; the computed destination stands in
