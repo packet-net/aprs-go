@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.0 (2026-11-25)
+
+- Conformance vectors: the vectors submodule is pinned at 85c675b.
+- Weather: text left after the fields that starts like a field (a letter APRS12c defines followed by a digit, or `t` then `-` and a digit), whether that field was read or not, is `weather-comment` text, not a software type and unit: `t2h35` after a repeated `t` is the comment `t2h35`, while `hXYZ`, `e1ab` and `dP1x` stay a software type and unit (aprs-vectors#42). This holds in position, object, item and positionless reports. Data with such a software type and unit is refused `text-reads-as-field` by the read-back.
+- The vectors runner gives `not-encodable` for a third-party inner Mic-E report under a destination it does not compute whose text would also read back changed (new case `precedence/not-encodable-and-text-reads-as-field`). The library already did.
+
 ## 1.3.0 (2026-11-16)
 
 - Conformance vectors: the vectors submodule is pinned at 26dd1dd. In a `/` or `@` report whose timestamp is not valid, when the seventh byte after the DTI is `z`, `/` or `h` and an uncompressed position follows the seven bytes (`@R30549z2831.07N/08142.92W_...`), the timestamp is garbled and the position is read after it, with `malformed-timestamp`; before, bytes such as `R30549z2831.0` could read as a compressed position straight after the DTI.
